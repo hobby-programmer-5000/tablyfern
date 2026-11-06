@@ -1,0 +1,5 @@
+[
+  {"order_id": "0001", "customer": {"city": "Boston", "segment": "Retail"}, "total": 29.5, "shipped": true},
+  {"order_id": "0002", "customer": {"city": "Seattle", "segment": "Wholesale"}, "total": 48, "shipped": false},
+  {"order_id": "0003", "customer": {"city": "Austin"}, "total": 15.25, "shipped": true}
+]

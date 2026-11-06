@@ -1,0 +1,3 @@
+{"event":"view","order_id":"0001","details":{"source":"demo","count":1}}
+{"event":"purchase","order_id":"0001","details":{"source":"demo","count":2}}
+{"event":"refund","order_id":"0002","details":{"source":"demo"}}
