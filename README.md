@@ -6,7 +6,7 @@ Tablyfern is a local Windows tool that converts JSON and JSON Lines into one wor
 
 ![Tablyfern previews an orders tab from a three-file workbook](docs/demo-en.png)
 
-Large-file support and the **Limits** dialog are available when running the current source. The v0.1.0 ZIP has a 10 MiB input file limit.
+Use [v0.2.0](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.2.0) for large-file support and the **Limits** dialog. The v0.1.0 ZIP has a 10 MiB input file limit.
 
 1. Download the Windows x64 ZIP from [GitHub Releases](https://github.com/hobby-programmer-5000/tablyfern/releases), extract the entire folder, and open **Tablyfern.exe**. Keep its `_internal` folder beside the EXE. From source, use Python 3.12–3.14, run `python -m pip install -r requirements.txt` from the repository root, then run `python app.py` or double-click [run.bat](run.bat).
 2. Click **Open JSON…**, paste data into the editor, or try **Load example**. Choose **JSONL** for pasted data when each line should be a separate record. Use the language menu to switch to Korean.
@@ -20,7 +20,7 @@ The Windows build uses the system Visual C++ runtime. If Windows reports a missi
 2. Use the menu above the source text to preview each tab. Tablyfern takes tab names from filenames, adjusts them to fit [Excel's tab-name rules](https://support.microsoft.com/en-gb/excel/rename-a-worksheet), and adds suffixes when names collide.
 3. Choose XLSX, XLSM, XLTX, XLTM, or ODS and click **Save file…** to save all tabs together. CSV and TSV are available for single-file exports.
 
-One selection can contain up to 100 files. If a file cannot be read or parsed, Tablyfern identifies it and keeps the previous preview. To return to editing one input, use **Open JSON…** or **Load example**.
+If a file cannot be read or parsed, Tablyfern identifies it and keeps the previous preview. To return to editing one input, use **Open JSON…** or **Load example**.
 
 ## How JSON maps to Excel
 
@@ -31,17 +31,16 @@ One selection can contain up to 100 files. If a file cannot be read or parsed, T
 
 ## File and worksheet limits
 
-Open **Limits** in the app for the same figures. UTF-8 `.json`, `.jsonl` and `.ndjson` files have no fixed input size cap. A 1 GiB file can convert if its records and worksheet fit and the temporary and output drives have sufficient free space. Workbook packages can reach an internal size limit before the row or column limit. [XlsxWriter package limits](https://xlsxwriter.readthedocs.io/exceptions.html#exception-filesizeerror)
+Open **Limits** in the app for the same figures. Tablyfern sets no fixed size cap for a file, pasted text or an individual record, and no fixed count for a batch. Open UTF-8 JSON or JSON Lines (`.jsonl`, `.ndjson`, `.jsonlines` or `.ldjson`). For other extensions, choose **All files** and let the app detect JSON or JSON Lines. Large files use temporary disk space, and a single record needs enough memory to be parsed. Pasted text also stays in the editor. A workbook package can reach an internal size limit before the row or column limit. [XlsxWriter package limits](https://xlsxwriter.readthedocs.io/exceptions.html#exception-filesizeerror)
 
 Verified on Windows x64 with a synthetic 1,073,745,005-byte JSONL file. The XLSX reopened with all 65,445 data rows and both columns intact. That test used repetitive text and a narrow table. Export size and runtime depend on the input.
 
 | Item | Limit |
 | --- | --- |
-| A disk-processed record | 16,777,216 characters per JSON array item, JSONL/NDJSON line, or standalone JSON object or value |
 | Worksheet | One per input file. 1,048,575 data rows plus the header and 16,384 columns, including continuation columns. |
 | Cell text | Imported text beyond 32,767 UTF-16 units or 253 line feeds continues in adjacent columns such as `text [part 2]`. Join parts in column order to reconstruct the value. |
-| Editor and preview | Paste up to 10 MiB. Preview up to 50 rows and 40 columns. |
-| Batch and delimited output | Up to 100 files per batch. CSV and TSV support one table and 10,000,000 cells, including headers. |
+| Preview | Up to 50 rows and 40 columns. |
+| Delimited output | CSV and TSV write one table with the same row and column bounds. |
 
 [Excel specifications and limits](https://support.microsoft.com/en-us/excel/excel-specifications-and-limits)
 
@@ -53,16 +52,16 @@ Verified on Windows x64 with a synthetic 1,073,745,005-byte JSONL file. The XLSX
 | `.xlsm` | Macro-enabled workbook format with data only |
 | `.xltx` | Excel template |
 | `.xltm` | Macro-enabled template format with data only |
-| `.ods` | OpenDocument spreadsheet. Text containing XML-incompatible characters is rejected with a cell location. |
-| `.csv`, `.tsv` | UTF-8 with BOM. Excel may infer its own data types when opening the file. Formula-like text gets a leading apostrophe. The grid is limited to 10 million cells. |
+| `.ods` | OpenDocument spreadsheet. Text containing XML-incompatible characters is rejected with a cell location. Excel may report a used range wider than the populated columns. |
+| `.csv`, `.tsv` | UTF-8 with BOM. Excel may infer its own data types when opening the file. Formula-like text gets a leading apostrophe. |
 
 For `.xls` or `.xlsb`, export `.xlsx` and use **Save As** in desktop Excel. Use a workbook format when you need to preserve typed cells, leading zeros or long numeric IDs in Excel. [Microsoft file format reference](https://support.microsoft.com/en-us/excel/file-formats-that-are-supported-in-excel)
 
 ## Synthetic compatibility checks
 
 - Start with the original synthetic [sample data](samples/README.md). Run `python fixtures.py .cache/fixtures` to generate 35 additional synthetic inputs in a new directory.
-- With the app dependencies and the test reader `openpyxl==3.1.5` installed, run `python verify_formats.py .cache/matrix`. See `matrix.md` and `batch-matrix.md` for single-file and 32-tab workbook checks. [openpyxl 3.1.5](https://pypi.org/project/openpyxl/3.1.5/)
-- To build on Windows x64, install [requirements-build.txt](requirements-build.txt) and run `python scripts/build.py --dist-dir dist/0.1.0` into a new directory. The script tests the frozen app and writes a ZIP and SHA-256 checksum.
+- With the app dependencies and the test reader `openpyxl==3.1.5` installed, run `python verify_formats.py .cache/matrix`. See `matrix.md` and `batch-matrix.md` for single-file and 33-tab workbook checks. [openpyxl 3.1.5](https://pypi.org/project/openpyxl/3.1.5/)
+- To build on Windows x64, install [requirements-build.txt](requirements-build.txt) and run `python scripts/build.py --dist-dir dist/0.2.0` into a new directory. The script tests the frozen app and writes a ZIP and SHA-256 checksum.
 
 ## Licenses
 

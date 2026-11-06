@@ -9,7 +9,7 @@ from zipfile import ZIP_STORED, ZipFile
 
 from openpyxl import load_workbook
 
-from converter import Cell, ConversionError, Table, parse_table, read_batch, read_json_file
+from converter import Cell, ConversionError, Table, read_batch, read_table_file
 from exporters import FORMATS, WORKBOOK_FORMATS, save_table, save_workbook
 from fixtures import catalog, generate
 
@@ -205,7 +205,7 @@ def run(output: Path) -> int:
     for case in cases:
         source = output / "inputs" / case.filename
         try:
-            table = parse_table(read_json_file(source), case.mode)
+            _, table = read_table_file(source)
         except ConversionError as exc:
             good = exc.code == case.expected
             rejected += good

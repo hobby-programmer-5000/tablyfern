@@ -54,7 +54,7 @@ class ConverterTests(TestCase):
                 ["logs", "LOGS (2)", "History (2)", "_서울_", "😀" * 15, "😀" * 13 + " (2)", "a&b"],
             )
 
-    def test_batch_reports_bad_file_and_enforces_limits(self):
+    def test_batch_reports_bad_file_and_accepts_more_than_100_inputs(self):
         with scratch_folder() as folder:
             good, bad = folder / "good.json", folder / "bad.jsonl"
             good.write_text('{"a":1}', encoding="utf-8-sig")
@@ -63,9 +63,9 @@ class ConverterTests(TestCase):
                 read_batch([good, bad])
             self.assertEqual(raised.exception.path, bad)
             self.assertEqual(raised.exception.issue.details, {"line": 2, "column": 6})
-            with patch("converter.MAX_BATCH_FILES", 1), self.assertRaises(ConversionError) as count:
-                read_batch([good, bad])
-            self.assertEqual(count.exception.code, "batch_count")
+            batch = read_batch([good] * 101)
+            self.assertEqual(len(batch), 101)
+            self.assertEqual(batch[-1].name, "good (101)")
 
     def test_large_jsonl_stays_on_disk_and_reassembles_long_cells(self):
         import json
@@ -103,6 +103,46 @@ class ConverterTests(TestCase):
                     path.write_text(invalid, encoding="utf-8")
                     with self.subTest(invalid=invalid), self.assertRaises(ConversionError):
                         read_table_file(path, editor_limit=0)
+
+    def test_record_above_previous_limit_in_files_and_pasted_input(self):
+        payload = "x" * (16 * 1024 * 1024 + 1)
+        record = '{"text":"' + payload + '"}'
+        with scratch_folder() as folder:
+            cases = (
+                ("array.json", "[" + record + "]", 1),
+                ("records.jsonl", record + "\n", 1),
+                ("auto.data", record + '\n{"text":"tail"}\n', 2),
+            )
+            for name, source, row_count in cases:
+                with self.subTest(name=name):
+                    path = folder / name
+                    path.write_text(source, encoding="utf-8-sig")
+                    editor, table = read_table_file(path)
+                    self.assertIsNone(editor)
+                    self.assertEqual(len(table.rows), row_count)
+                    self.assertEqual("".join(next(iter(table.rows)).values()), payload)
+            pasted = parse_table(record)
+            self.assertIsInstance(pasted.rows, DiskRows)
+            self.assertEqual("".join(next(iter(pasted.rows)).values()), payload)
+
+    def test_large_alias_keeps_one_array_per_json_line(self):
+        with scratch_folder() as folder:
+            for suffix in (".ndjson", ".jsonlines", ".ldjson"):
+                path = folder / ("events" + suffix)
+                path.write_text("[1,2]\n", encoding="utf-8")
+                _, table = read_table_file(path, editor_limit=0)
+                self.assertEqual(list(table.rows), [{0: "[1,2]"}])
+
+    def test_auto_detects_lines_before_applying_worksheet_row_limit(self):
+        with scratch_folder() as folder, patch("converter.MAX_ROWS", 4):
+            path = folder / "events.data"
+            path.write_text('[1,2,3,4,5]\n{"event":1}\n', encoding="utf-8")
+            _, table = read_table_file(path, editor_limit=0)
+            self.assertEqual(list(table.rows), [{0: "[1,2,3,4,5]"}, {0: '{"event":1}'}])
+            path.write_text("[1,2,3,4,5]", encoding="utf-8")
+            with self.assertRaises(ConversionError) as rejected:
+                read_table_file(path, editor_limit=0)
+            self.assertEqual(rejected.exception.code, "rows")
 
     def test_second_tab_export_failure_preserves_existing_workbook(self):
         with scratch_folder() as folder:
@@ -152,18 +192,21 @@ class ConverterTests(TestCase):
                 save_table(parse_table('{"a":1}'), folder / "sample.xlsb")
             self.assertEqual(unsupported.exception.code, "extension")
 
-    def test_invalid_input_and_cell_limit(self):
+    def test_invalid_input_and_small_text_continuation(self):
         cases = {
             "[": "invalid",
             '{"x":1,"x":2}': "duplicate",
             "[NaN]": "constant",
             r'"\ud800"': "unicode",
-            '"' + "😀" * 16_384 + '"': "cell_limit",
         }
         for source, code in cases.items():
             with self.subTest(code=code), self.assertRaises(ConversionError) as raised:
                 parse_table(source)
             self.assertEqual(raised.exception.code, code)
+        value = "😀" * 16_384
+        table = parse_table('"' + value + '"')
+        self.assertEqual(table.headers, ("value", "value [part 2]"))
+        self.assertEqual(table.rows[0][0] + table.rows[0][1], value)
 
     def test_workbook_types_and_blank_rows(self):
         with scratch_folder() as root:

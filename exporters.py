@@ -22,7 +22,6 @@ OPEN_XML_TYPES = {
 }
 WORKBOOK_FORMATS = (".xlsx", *OPEN_XML_TYPES, ".ods")
 FORMATS = (*WORKBOOK_FORMATS, ".csv", ".tsv")
-MAX_DELIMITED_CELLS = 10_000_000
 CONTENT_TYPES = "[Content_Types].xml"
 ODS_MIME = "application/vnd.oasis.opendocument.spreadsheet"
 ODF_NS = "urn:oasis:names:tc:opendocument:xmlns:"
@@ -145,8 +144,6 @@ def save_table(table: Table, destination: Path) -> None:
     extension = destination.suffix.lower()
     if extension not in FORMATS:
         raise ConversionError("extension")
-    if extension in (".csv", ".tsv") and (1 + len(table.rows)) * len(table.headers) > MAX_DELIMITED_CELLS:
-        raise ConversionError("delimited_limit")
     _save({"Data": table}, destination, extension)
 
 

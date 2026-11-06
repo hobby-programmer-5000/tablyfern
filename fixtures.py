@@ -53,7 +53,7 @@ def catalog() -> list[Case]:
         Case("27-duplicate.json", '{"x":1,"x":2}', "duplicate"),
         Case("28-non-json-number.json", '[NaN]', "constant"),
         Case("29-invalid-unicode.json", r'"\ud800"', "unicode"),
-        Case("30-overlong-cell.json", json.dumps("a" * 32768), "cell_limit"),
+        Case("30-split-long-cell.json", json.dumps("a" * 32768), (1, 2)),
         Case("31-empty-line.jsonl", '{"a":1}\n\n{"a":2}\n', "invalid"),
         Case("32-malformed-line.jsonl", '{"a":1}\n{"a":}\n', "invalid"),
         Case("33-duplicate-line.jsonl", '{"a":1}\n{"b":1,"b":2}\n', "duplicate_line"),

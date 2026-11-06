@@ -25,11 +25,9 @@ from PySide6.QtWidgets import (
 )
 
 from converter import (
-    MAX_BATCH_FILES,
-    MAX_BYTES,
+    EDITOR_THRESHOLD,
     MAX_COLUMNS,
     MAX_LINE_FEEDS,
-    MAX_RECORD_SIZE,
     MAX_ROWS,
     MAX_TEXT,
     BatchInputError,
@@ -41,7 +39,7 @@ from converter import (
     read_batch,
     read_table_file,
 )
-from exporters import FORMATS, MAX_DELIMITED_CELLS, WORKBOOK_FORMATS, save_table, save_workbook
+from exporters import FORMATS, WORKBOOK_FORMATS, save_table, save_workbook
 from version import VERSION
 
 PREVIEW_ROWS = 50
@@ -75,7 +73,10 @@ MESSAGES = {
     "partial": (" · Preview shows {shown_rows:,} rows × {shown_columns:,} columns", " · 미리보기 {shown_rows:,}행 × {shown_columns:,}열 표시"),
     "saved": ("Saved {name}", "{name} 저장 완료"),
     "saved_batch": ("Saved {name} with {count} tabs", "{name} 저장 완료 · {count}개 탭"),
-    "json_filter": ("JSON files (*.json *.jsonl *.ndjson);;All files (*)", "JSON 파일 (*.json *.jsonl *.ndjson);;모든 파일 (*)"),
+    "json_filter": (
+        "JSON files (*.json *.jsonl *.ndjson *.jsonlines *.ldjson);;All files (*)",
+        "JSON 파일 (*.json *.jsonl *.ndjson *.jsonlines *.ldjson);;모든 파일 (*)",
+    ),
     "export_filter": ("{kind} file (*{extension})", "{kind} 파일 (*{extension})"),
     "invalid": ("Invalid JSON at line {line}, column {column}. Check the syntax and retry.", "JSON 형식 오류 ({line}줄, {column}번째 문자). 문법을 확인하고 다시 시도하세요."),
     "duplicate": ("An object has a duplicate key. Give its fields unique names.", "객체에 중복 키가 있습니다. 각 필드에 서로 다른 이름을 사용하세요."),
@@ -83,7 +84,6 @@ MESSAGES = {
     "constant": ("Use valid JSON numbers. NaN and Infinity are unsupported.", "올바른 JSON 숫자를 입력하세요. NaN과 Infinity는 지원되지 않습니다."),
     "constant_line": ("Invalid number on line {line}. Replace NaN or Infinity with a valid JSON value.", "{line}줄의 숫자가 잘못되었습니다. NaN 또는 Infinity를 올바른 JSON 값으로 바꾸세요."),
     "depth": ("The JSON is nested too deeply. Reduce nesting and retry.", "JSON 중첩이 너무 깊습니다. 중첩을 줄인 뒤 다시 시도하세요."),
-    "size": ("Pasted input exceeds 10 MiB. Save it as a file and open it instead.", "붙여넣은 입력이 10 MiB를 초과했습니다. 파일로 저장한 뒤 열어 주세요."),
     "encoding": ("Use UTF-8 JSON. Save the input as UTF-8 and retry.", "UTF-8 JSON을 사용하세요. 입력을 UTF-8로 저장한 뒤 다시 시도하세요."),
     "unicode": ("Invalid Unicode in Excel row {row}, column {column}. Correct the source text.", "엑셀 {row}행 {column}열에 잘못된 유니코드가 있습니다. 원본 텍스트를 수정하세요."),
     "cell_limit": ("Text exceeds Excel's limit in row {row}, column {column}. Shorten the source value.", "{row}행 {column}열의 텍스트가 엑셀 셀 한도를 초과합니다. 원본 값을 줄이세요."),
@@ -93,14 +93,10 @@ MESSAGES = {
     "save": ("Could not save the workbook. Check the destination or close the file in Excel and retry.", "통합 문서를 저장할 수 없습니다. 저장 위치를 확인하거나 엑셀에서 파일을 닫고 다시 시도하세요."),
     "extension": ("Use a filename ending in {extension}.", "파일 이름의 끝에 {extension}을 사용하세요."),
     "ods_character": ("ODS cannot store a character in {sheet}, row {row}, column {column}. Edit it or choose Excel format.", "ODS가 {sheet} 탭 {row}행 {column}열의 문자를 저장할 수 없습니다. 해당 문자를 편집하거나 Excel 형식을 선택하세요."),
-    "delimited_limit": ("This table exceeds the CSV/TSV grid limit of 10 million cells. Choose a workbook format.", "CSV/TSV의 1,000만 셀 한도를 초과했습니다. 통합 문서 형식을 선택하세요."),
     "batch_failure": ("Could not load the selection. {name} · {reason}", "선택한 파일을 불러오지 못했습니다. {name} · {reason}"),
-    "batch_count": ("Select at most 100 files at a time.", "한 번에 최대 100개 파일을 선택하세요."),
     "loading": ("Reading and preparing the file…", "파일을 읽고 표를 만드는 중…"),
     "saving": ("Writing the output file…", "출력 파일을 저장하는 중…"),
     "stream_notice": ("This file is processed on disk. Use the table preview below.", "이 파일은 디스크에서 처리합니다. 아래 표 미리보기에서 확인하세요."),
-    "large_format": ("For large input, use a .json, .jsonl or .ndjson extension.", "큰 입력 파일에는 .json, .jsonl 또는 .ndjson 확장자를 사용하세요."),
-    "record_size": ("Record {record} exceeds 16 Mi characters. Split that record before opening.", "{record}번째 레코드가 16 Mi자(16,777,216자)를 초과했습니다. 해당 레코드를 나눈 뒤 열어 주세요."),
     "invalid_record": ("Invalid JSON near record {record}. Check the source syntax.", "{record}번째 레코드 부근에 JSON 형식 오류가 있습니다. 원본 문법을 확인하세요."),
     "source_changed": ("The input changed while being read. Open it again.", "읽는 동안 입력 파일이 바뀌었습니다. 다시 열어 주세요."),
     "scratch": ("Could not write temporary data. Check available disk space.", "임시 데이터를 쓸 수 없습니다. 디스크 여유 공간을 확인하세요."),
@@ -110,26 +106,28 @@ MESSAGES = {
 }
 
 LIMITS = (
-    """FILE INPUT
-There is no fixed file-size cap for UTF-8 JSON, JSONL or NDJSON. Large files use temporary disk space. A 1 GiB file can fit if its records and output meet the limits below and both the temporary and destination drives have enough free space. A workbook package can hit a size limit even when its rows and columns fit.
+    """INPUT AND RESOURCES
+Tablyfern sets no fixed size cap on files, pasted text, individual records or the number of files in a batch. Large files use temporary disk space. A single record still needs enough memory to be parsed, and pasted text stays in the editor. Unknown file extensions use automatic JSON/JSON Lines detection.
 
-PER RECORD AND WORKSHEET
-Disk processing supports up to {record:,} characters per JSON array item or JSONL/NDJSON line. A single JSON object or scalar counts as one record.
+WORKSHEET AND OUTPUT
 Each input file maps to one worksheet with up to {rows:,} data rows plus the header and {columns:,} columns, including continuation columns.
 Imported text beyond {text:,} UTF-16 units or {line_feeds} line feeds per cell continues in adjacent columns. Join the parts in order to recover the text.
+Preview shows up to {preview_rows} rows and {preview_columns} columns. Free space on both the temporary and output drives and the workbook package size also affect export.
 
-OTHER LIMITS
-Editor paste is limited to {paste} MiB. Preview shows up to {preview_rows} rows and {preview_columns} columns. A batch can contain up to {batch} files. CSV and TSV support one table and up to {delimited:,} cells, including the header.""",
-    """파일 입력
-UTF-8 JSON, JSONL, NDJSON에 고정 파일 크기 한도는 없습니다. 큰 파일은 디스크 임시 공간을 사용합니다. 1 GiB 파일도 아래 레코드·출력 한도에 맞고 임시 폴더와 저장 위치에 여유 공간이 있으면 처리할 수 있습니다. 행과 열이 한도 안이어도 통합 문서 패키지가 크기 한도에 도달할 수 있습니다.
+FORMAT NOTES
+CSV and TSV save one table with the same row and column bounds. Excel may infer cell types when importing text. Use XLSX for long IDs and leading zeros.
+Excel can show an ODS used range wider than its actual data. For XLS or XLSB, open an exported XLSX in Excel and choose Save As.""",
+    """입력 및 필요한 공간
+파일 크기, 붙여넣기 크기, 레코드 크기, 한 번에 여는 파일 수에 앱이 정한 고정 한도는 없습니다. 큰 파일은 디스크 임시 공간을 사용합니다. 레코드 하나를 읽을 메모리가 필요하며, 붙여넣은 텍스트는 편집기에 남습니다. 알 수 없는 확장자는 JSON과 JSONL을 자동 감지합니다.
 
-레코드 및 시트
-디스크 처리 시 JSON 배열 항목 하나 또는 JSONL·NDJSON 한 줄은 최대 {record:,}자입니다. 단일 JSON 객체나 값은 레코드 하나입니다.
+시트 및 출력
 파일 하나당 시트 한 장으로 저장합니다. 시트마다 머리글 외 데이터 {rows:,}행, 이어지는 열을 포함해 {columns:,}열까지 지원합니다.
 가져온 텍스트가 셀당 UTF-16 {text:,}단위 또는 줄바꿈 {line_feeds}개를 넘으면 옆 열로 나눕니다. 열 순서대로 이어 붙이면 원래 텍스트를 복원할 수 있습니다.
+미리보기는 최대 {preview_rows}행과 {preview_columns}열을 보여줍니다. 임시 폴더와 저장 위치의 여유 공간, 통합 문서 패키지 크기도 저장에 영향을 줍니다.
 
-기타 한도
-붙여넣기는 {paste} MiB까지이며, 미리보기는 최대 {preview_rows}행과 {preview_columns}열을 보여줍니다. 한 번에 파일 {batch}개까지 열 수 있습니다. CSV와 TSV는 표 하나를 지원하며 머리글을 포함해 {delimited:,}셀까지 저장할 수 있습니다.""",
+형식별 참고 사항
+CSV와 TSV는 같은 행·열 한도 안에서 표 하나를 저장합니다. Excel이 가져올 때 셀 유형을 추정할 수 있습니다. 긴 ID와 앞자리 0은 XLSX에서 보존할 수 있습니다.
+Excel이 ODS의 사용 범위를 실제 데이터보다 넓게 표시할 수 있습니다. XLS 또는 XLSB는 내보낸 XLSX를 Excel에서 열어 다른 이름으로 저장하세요.""",
 )
 
 
@@ -289,10 +287,8 @@ class Window(QWidget):
         details = QPlainTextEdit()
         details.setReadOnly(True)
         details.setPlainText(LIMITS[self.language.currentIndex()].format(
-            record=MAX_RECORD_SIZE, rows=MAX_ROWS - 1, columns=MAX_COLUMNS,
-            text=MAX_TEXT, line_feeds=MAX_LINE_FEEDS, paste=MAX_BYTES // (1024 * 1024),
-            preview_rows=PREVIEW_ROWS, preview_columns=PREVIEW_COLUMNS, batch=MAX_BATCH_FILES,
-            delimited=MAX_DELIMITED_CELLS,
+            rows=MAX_ROWS - 1, columns=MAX_COLUMNS, text=MAX_TEXT, line_feeds=MAX_LINE_FEEDS,
+            preview_rows=PREVIEW_ROWS, preview_columns=PREVIEW_COLUMNS,
         ))
         details.setAccessibleName(self.text("limits"))
         layout.addWidget(details)
@@ -404,9 +400,14 @@ class Window(QWidget):
             self.show_table(self.file_table)
             return
         self.invalidate_preview()
+        source = self.editor.toPlainText()
+        mode = self.input_mode.currentData()
+        if len(source) > EDITOR_THRESHOLD:
+            self.start_job("loading", lambda: parse_table(source, mode), self.show_table, "read")
+            return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            table = parse_table(self.editor.toPlainText(), self.input_mode.currentData())
+            table = parse_table(source, mode)
         except ConversionError as exc:
             self.show_status(exc.code, error=True, **exc.details)
             return
