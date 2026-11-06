@@ -8,10 +8,10 @@ from shutil import copyfileobj
 from tempfile import NamedTemporaryFile, TemporaryFile
 from xml.etree import ElementTree
 from xml.sax.saxutils import escape, quoteattr
-from zipfile import ZIP_DEFLATED, ZIP_STORED, ZipFile
+from zipfile import ZIP_DEFLATED, ZIP_STORED, LargeZipFile, ZipFile
 
 from xlsxwriter import Workbook
-from xlsxwriter.exceptions import XlsxWriterException
+from xlsxwriter.exceptions import FileSizeError, XlsxWriterException
 
 from converter import Cell, ConversionError, Table
 
@@ -173,6 +173,8 @@ def _save(tables: dict[str, Table], destination: Path, extension: str) -> None:
         else:
             _write_delimited(tables["Data"], temporary, extension)
         os.replace(temporary, destination)
+    except (FileSizeError, LargeZipFile) as exc:
+        raise ConversionError("workbook_size") from exc
     except XlsxWriterException as exc:
         raise ConversionError("save") from exc
     finally:

@@ -6,8 +6,9 @@ from unittest.mock import patch
 from uuid import uuid4
 from xml.etree import ElementTree
 from zipfile import ZipFile
+from xlsxwriter.exceptions import FileSizeError
 
-from converter import BatchInputError, ConversionError, parse_table, read_batch, read_json_file
+from converter import BatchInputError, ConversionError, DiskRows, parse_table, read_batch, read_json_file, read_table_file
 from exporters import save_table, save_workbook
 
 NAMESPACES = {"s": "http://schemas.openxmlformats.org/spreadsheetml/2006/main"}
@@ -26,6 +27,17 @@ def scratch_folder():
 
 
 class ConverterTests(TestCase):
+    def test_package_size_error_keeps_existing_destination(self):
+        with scratch_folder() as folder:
+            destination = folder / "existing.xlsx"
+            destination.write_bytes(b"previous version")
+            with patch("exporters._write_xlsx", side_effect=FileSizeError("too large")):
+                with self.assertRaises(ConversionError) as rejected:
+                    save_table(parse_table('{"id":1}'), destination)
+            self.assertEqual(rejected.exception.code, "workbook_size")
+            self.assertEqual(destination.read_bytes(), b"previous version")
+            self.assertEqual(list(folder.iterdir()), [destination])
+
     def test_batch_names_keep_order_and_resolve_conflicts(self):
         with scratch_folder() as folder:
             filenames = (
@@ -51,12 +63,46 @@ class ConverterTests(TestCase):
                 read_batch([good, bad])
             self.assertEqual(raised.exception.path, bad)
             self.assertEqual(raised.exception.issue.details, {"line": 2, "column": 6})
-            with patch("converter.MAX_BATCH_BYTES", 8), self.assertRaises(BatchInputError) as oversized:
-                read_batch([good])
-            self.assertEqual(oversized.exception.issue.code, "batch_size")
             with patch("converter.MAX_BATCH_FILES", 1), self.assertRaises(ConversionError) as count:
                 read_batch([good, bad])
             self.assertEqual(count.exception.code, "batch_count")
+
+    def test_large_jsonl_stays_on_disk_and_reassembles_long_cells(self):
+        import json
+
+        text = "a" * 32766 + "😀" + "line\n" * 255
+        with scratch_folder() as folder:
+            path = folder / "large.jsonl"
+            with path.open("w", encoding="utf-8") as file:
+                for number in range(340):
+                    file.write(json.dumps({"id": number, "text": text, "text [part 2]": "literal"}) + "\n")
+            self.assertGreater(path.stat().st_size, 10 * 1024 * 1024)
+            source, table = read_table_file(path)
+            self.assertIsNone(source)
+            self.assertIsInstance(table.rows, DiskRows)
+            self.assertEqual(len(table.rows), 340)
+            self.assertEqual(table.headers, ("id", "text", "text [part 2]_", "text [part 3]", "text [part 2]"))
+            for index, row in enumerate(table.rows):
+                self.assertEqual(row[0], index)
+                self.assertEqual("".join(row[column] for column in (1, 2, 3)), text)
+                self.assertEqual(row[4], "literal")
+            self.assertEqual(next(iter(table.rows))[0], 0)
+
+    def test_streaming_json_matches_mixed_shapes_and_numeric_chunk_boundaries(self):
+        with scratch_folder() as folder:
+            path = folder / "array.json"
+            source = '[{"id":1}, null, -123456789.125e-3, ["x",2], {"id":9007199254740993}]'
+            path.write_text(source, encoding="utf-8-sig")
+            with patch("converter.READ_CHUNK", 3):
+                editor, table = read_table_file(path, editor_limit=0)
+                self.assertIsNone(editor)
+                expected = parse_table(source)
+                self.assertEqual(table.headers, expected.headers)
+                self.assertEqual(list(table.rows), expected.rows)
+                for invalid in ("[1,]", "[1", "[1] 2", "[01]"):
+                    path.write_text(invalid, encoding="utf-8")
+                    with self.subTest(invalid=invalid), self.assertRaises(ConversionError):
+                        read_table_file(path, editor_limit=0)
 
     def test_second_tab_export_failure_preserves_existing_workbook(self):
         with scratch_folder() as folder:

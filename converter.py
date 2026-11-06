@@ -1,22 +1,50 @@
 """Turn JSON or JSON Lines into a sparse worksheet."""
 
 import json
+import os
 import re
 import unicodedata
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException
+from itertools import count
 from pathlib import Path
+from tempfile import TemporaryFile
+from typing import TextIO
 
 MAX_BYTES = 10 * 1024 * 1024
-MAX_BATCH_BYTES = 20 * 1024 * 1024
+MAX_RECORD_SIZE = 16 * 1024 * 1024
+READ_CHUNK = 256 * 1024
 MAX_BATCH_FILES = 100
 MAX_ROWS = 1_048_576
 MAX_COLUMNS = 16_384
 MAX_TEXT = 32_767
+MAX_LINE_FEEDS = 253
 MIN_EXCEL_NUMBER = Decimal("2.2251e-308")
 MAX_EXCEL_NUMBER = Decimal("9.99999999999999e307")
 
 Cell = str | float | bool | None
+Row = dict[int, Cell]
+
+
+class DiskRows:
+    """Reusable, sparse rows backed by an automatically removed temporary file."""
+
+    def __init__(self, file: TextIO, count: int, columns: list[int]):
+        self.file = file
+        self.count = count
+        self.columns = columns
+
+    def __len__(self) -> int:
+        return self.count
+
+    def __iter__(self) -> Iterator[Row]:
+        self.file.seek(0)
+        for line in self.file:
+            yield {self.columns[column]: value for column, value in json.loads(line)}
+
+    def __del__(self):
+        self.file.close()
 
 
 class ConversionError(ValueError):
@@ -45,14 +73,14 @@ class JsonNumber:
 @dataclass(frozen=True)
 class Table:
     headers: tuple[str, ...]
-    rows: list[dict[int, Cell]]
+    rows: list[Row] | DiskRows
 
 
 @dataclass(frozen=True)
 class BatchSheet:
     path: Path
     name: str
-    source: str
+    source: str | None
     table: Table
 
 
@@ -88,14 +116,9 @@ def read_batch(paths: list[Path]) -> list[BatchSheet]:
         raise ConversionError("batch_count")
     used = {"history"}
     sheets = []
-    total = 0
     for path in paths:
         try:
-            source, size = _read_source(path)
-            total += size
-            if total > MAX_BATCH_BYTES:
-                raise ConversionError("batch_size")
-            table = parse_table(source, input_mode_for(path))
+            source, table = read_table_file(path, editor_limit=1024 * 1024)
         except ConversionError as exc:
             raise BatchInputError(path, exc) from exc
         except OSError as exc:
@@ -118,16 +141,12 @@ def _reject_constant(_constant: str) -> None:
 
 
 def read_json_file(path: Path) -> str:
-    return _read_source(path)[0]
-
-
-def _read_source(path: Path) -> tuple[str, int]:
     with path.open("rb") as stream:
         data = stream.read(MAX_BYTES + 1)
     if len(data) > MAX_BYTES:
         raise ConversionError("size")
     try:
-        return data.decode("utf-8-sig"), len(data)
+        return data.decode("utf-8-sig")
     except UnicodeDecodeError as exc:
         raise ConversionError("encoding") from exc
 
@@ -161,7 +180,7 @@ def _check_text(value: str, row: int, column: int) -> None:
         length = len(value.encode("utf-16-le")) // 2
     except UnicodeEncodeError as exc:
         raise ConversionError("unicode", row=row, column=column) from exc
-    if length > MAX_TEXT or value.count("\n") > 253:
+    if length > MAX_TEXT or value.count("\n") > MAX_LINE_FEEDS:
         raise ConversionError("cell_limit", row=row, column=column)
 
 
@@ -173,11 +192,24 @@ def _cell_value(value: object) -> Cell:
     return value
 
 
+DECODER = json.JSONDecoder(
+    parse_int=JsonNumber, parse_float=JsonNumber,
+    parse_constant=_reject_constant, object_pairs_hook=_object_from_pairs,
+)
+JSON_SPACE = re.compile(r"[ \t\n\r]*")
+
+
 def _load(source: str) -> object:
-    return json.loads(
-        source, parse_int=JsonNumber, parse_float=JsonNumber,
-        parse_constant=_reject_constant, object_pairs_hook=_object_from_pairs,
-    )
+    return DECODER.decode(source)
+
+
+def _load_line(line: str, number: int) -> object:
+    try:
+        return _load(line)
+    except json.JSONDecodeError as exc:
+        raise ConversionError("invalid", line=number, column=exc.colno) from exc
+    except ConversionError as exc:
+        raise ConversionError(exc.code + "_line", line=number) from exc
 
 
 def _load_lines(source: str) -> list:
@@ -185,12 +217,7 @@ def _load_lines(source: str) -> list:
     for number, line in enumerate(source.removesuffix("\n").split("\n"), start=1):
         if number >= MAX_ROWS:
             raise ConversionError("rows")
-        try:
-            records.append(_load(line))
-        except json.JSONDecodeError as exc:
-            raise ConversionError("invalid", line=number, column=exc.colno) from exc
-        except ConversionError as exc:
-            raise ConversionError(exc.code + "_line", line=number) from exc
+        records.append(_load_line(line, number))
     return records
 
 
@@ -216,33 +243,229 @@ def parse_table(source: str, mode: str = "json") -> Table:
         raise ConversionError("depth") from exc
 
 
-def _to_table(records: list) -> Table:
-    if len(records) >= MAX_ROWS:
-        raise ConversionError("rows")
+class JsonRecords:
+    """Decode one top-level array item at a time using the standard decoder."""
 
-    column_by_header = {}
-    rows = []
-    object_records = bool(records) and all(isinstance(record, dict) for record in records)
-    if not object_records:
-        column_by_header["value"] = 0
+    def __init__(self, stream: TextIO):
+        self.stream = stream
+        self.buffer = ""
+        self.pos = 0
+        self.eof = False
 
+    def fill(self) -> bool:
+        self.buffer = self.buffer[self.pos:]
+        self.pos = 0
+        chunk = self.stream.read(READ_CHUNK)
+        self.buffer += chunk
+        self.eof = not chunk
+        return bool(chunk)
+
+    def peek(self) -> str:
+        while True:
+            self.pos = JSON_SPACE.match(self.buffer, self.pos).end()
+            if self.pos < len(self.buffer):
+                return self.buffer[self.pos]
+            if self.eof or not self.fill():
+                return ""
+
+    def value(self, number: int) -> object:
+        while True:
+            try:
+                value, end = DECODER.raw_decode(self.buffer, self.pos)
+            except json.JSONDecodeError as exc:
+                if self.eof:
+                    raise ConversionError("invalid_record", record=number) from exc
+            else:
+                next_char = self.buffer[end:end + 1]
+                # A number ending at a chunk boundary may have more digits or an exponent.
+                incomplete = not self.eof and isinstance(value, JsonNumber) and (
+                    not next_char or next_char in ".eE"
+                )
+                if not incomplete:
+                    if end - self.pos > MAX_RECORD_SIZE:
+                        raise ConversionError("record_size", record=number)
+                    self.pos = end
+                    return value
+            if len(self.buffer) - self.pos > MAX_RECORD_SIZE:
+                raise ConversionError("record_size", record=number)
+            self.fill()
+
+    def __iter__(self) -> Iterator[object]:
+        if self.peek() != "[":
+            value = self.value(1)
+            if self.peek():
+                raise ConversionError("invalid_record", record=1)
+            yield value
+            return
+        self.pos += 1
+        if self.peek() == "]":
+            self.pos += 1
+        else:
+            for number in count(1):
+                if number >= MAX_ROWS:
+                    raise ConversionError("rows")
+                self.peek()
+                yield self.value(number)
+                delimiter = self.peek()
+                if delimiter not in (",", "]"):
+                    raise ConversionError("invalid_record", record=number)
+                self.pos += 1
+                if delimiter == "]":
+                    break
+        if self.peek():
+            raise ConversionError("invalid_record", record=1)
+
+
+def _stream_lines(stream: TextIO) -> Iterator[object]:
+    number = 0
+    while line := stream.readline(MAX_RECORD_SIZE + 2):
+        number += 1
+        if number >= MAX_ROWS:
+            raise ConversionError("rows")
+        if len(line.removesuffix("\n").removesuffix("\r")) > MAX_RECORD_SIZE:
+            raise ConversionError("record_size", record=number)
+        yield _load_line(line, number)
+
+
+def _source_stamp(stream: TextIO) -> tuple[int, int]:
+    stat = os.fstat(stream.fileno())
+    return stat.st_size, stat.st_mtime_ns
+
+
+def read_table_file(path: Path, editor_limit: int = MAX_BYTES) -> tuple[str | None, Table]:
+    mode = input_mode_for(path)
+    if mode == "auto":
+        editor_limit = MAX_BYTES
+    if path.stat().st_size <= editor_limit:
+        source = read_json_file(path)
+        try:
+            return source, parse_table(source, mode)
+        except ConversionError as exc:
+            if exc.code != "cell_limit" or mode == "auto":
+                raise
+    if mode == "auto":
+        raise ConversionError("large_format")
+
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="\n") as stream:
+            stamp = _source_stamp(stream)
+            read_records = _stream_lines if mode == "jsonl" else JsonRecords
+            object_records = all(isinstance(record, dict) for record in read_records(stream))
+            if _source_stamp(stream) != stamp:
+                raise ConversionError("source_changed")
+            stream.seek(0)
+            table = _spool_table(read_records(stream), object_records)
+            if _source_stamp(stream) != stamp:
+                raise ConversionError("source_changed")
+            return None, table
+    except UnicodeDecodeError as exc:
+        raise ConversionError("encoding") from exc
+    except RecursionError as exc:
+        raise ConversionError("depth") from exc
+
+
+def _text_parts(value: Cell, row: int, column: int, split: bool) -> Iterator[Cell]:
+    if not isinstance(value, str):
+        yield value
+        return
+    if not split:
+        _check_text(value, row, column)
+        yield value
+        return
+    try:
+        encoded = value.encode("utf-16-le")
+    except UnicodeEncodeError as exc:
+        raise ConversionError("unicode", row=row, column=column) from exc
+    if len(encoded) <= 2 * MAX_TEXT and value.count("\n") <= MAX_LINE_FEEDS:
+        yield value
+        return
+    # Cut at both Excel limits while keeping every character, including newlines.
+    start = 0
+    while start < len(encoded):
+        end = min(start + 2 * MAX_TEXT, len(encoded))
+        if 0xD8 <= encoded[end - 1] <= 0xDB:
+            end -= 2
+        text = encoded[start:end].decode("utf-16-le")
+        if text.count("\n") > MAX_LINE_FEEDS:
+            text = "\n".join(text.split("\n", MAX_LINE_FEEDS + 1)[:MAX_LINE_FEEDS]) + "\n"
+            end = start + len(text.encode("utf-16-le"))
+        yield text
+        start = end
+
+
+def _rows(
+    records: Iterable[object], columns: dict[str, list[int]], object_records: bool, split: bool,
+) -> Iterator[Row]:
+    column_count = 0
     for row_number, record in enumerate(records, start=2):
+        if row_number > MAX_ROWS:
+            raise ConversionError("rows")
         fields = _flatten(record) if object_records else (("value", record),)
         row = {}
         for header, value in fields:
-            if header not in column_by_header:
-                column = len(column_by_header)
-                if column >= MAX_COLUMNS:
-                    raise ConversionError("columns")
-                _check_text(header, 1, column + 1)
-                column_by_header[header] = column
-            column = column_by_header[header]
-            cell = _cell_value(value)
-            if isinstance(cell, str):
-                _check_text(cell, row_number, column + 1)
-            if cell is not None:
-                row[column] = cell
-        rows.append(row)
-    if not column_by_header:
-        column_by_header["value"] = 0
-    return Table(tuple(column_by_header), rows)
+            if header not in columns:
+                _check_text(header, 1, column_count + 1)
+                columns[header] = []
+            indices = columns[header]
+            column = indices[0] if indices else column_count
+            for index, cell in enumerate(_text_parts(_cell_value(value), row_number, column + 1, split)):
+                if index == len(indices):
+                    if column_count >= MAX_COLUMNS:
+                        raise ConversionError("columns")
+                    indices.append(column_count)
+                    column_count += 1
+                if cell is not None:
+                    row[indices[index]] = cell
+        yield row
+
+
+def _spool_table(records: Iterable[object], object_records: bool) -> Table:
+    try:
+        file = TemporaryFile(mode="w+t", encoding="utf-8", newline="\n")
+    except OSError as exc:
+        raise ConversionError("scratch") from exc
+    columns: dict[str, list[int]] = {}
+    count = 0
+    try:
+        for count, row in enumerate(_rows(records, columns, object_records, split=True), start=1):
+            try:
+                file.write(json.dumps(list(row.items()), ensure_ascii=False, separators=(",", ":")) + "\n")
+            except OSError as exc:
+                raise ConversionError("scratch") from exc
+        try:
+            file.flush()
+        except OSError as exc:
+            raise ConversionError("scratch") from exc
+        headers, remap = _continuation_headers(columns)
+        return Table(headers, DiskRows(file, count, remap))
+    except BaseException:
+        file.close()
+        raise
+
+
+def _continuation_headers(columns: dict[str, list[int]]) -> tuple[tuple[str, ...], list[int]]:
+    used = set(columns)
+    headers = []
+    remap = [0] * sum(map(len, columns.values()))
+    for name, indices in columns.items():
+        for part, original in enumerate(indices, start=1):
+            header = name
+            if part > 1:
+                suffix = f" [part {part}]"
+                while True:
+                    prefix = name.encode("utf-16-le")[:2 * (MAX_TEXT - len(suffix))].decode("utf-16-le", "ignore")
+                    header = prefix + suffix
+                    if header not in used:
+                        break
+                    suffix += "_"
+                used.add(header)
+            remap[original] = len(headers)
+            headers.append(header)
+    return tuple(headers) or ("value",), remap
+
+
+def _to_table(records: list) -> Table:
+    object_records = bool(records) and all(isinstance(record, dict) for record in records)
+    columns: dict[str, list[int]] = {}
+    rows = list(_rows(records, columns, object_records, split=False))
+    return Table(tuple(columns) or ("value",), rows)
