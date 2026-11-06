@@ -1,0 +1,7 @@
+{
+  "long_id": 9007199254740993,
+  "zero_padded": "00042",
+  "amount": 12.5,
+  "literal": "=2+2",
+  "tags": ["demo", "precision"]
+}

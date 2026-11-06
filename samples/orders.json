@@ -1,0 +1,7 @@
+[
+  {"order_id": "0001", "customer": {"city": "서울", "segment": "Retail"}, "total": 29.5, "shipped": true},
+  {"order_id": "0002", "customer": {"city": "부산", "segment": "Wholesale"}, "total": 48, "shipped": false},
+  {"order_id": "0003", "customer": {"city": "대전", "segment": "Retail"}, "total": 15.25, "shipped": true},
+  {"order_id": "0004", "customer": {"city": "제주", "segment": "Retail"}, "total": 62, "shipped": false},
+  {"order_id": "0005", "customer": {"city": "광주", "segment": "Wholesale"}, "total": 37.75, "shipped": true}
+]
