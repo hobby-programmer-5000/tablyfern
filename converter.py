@@ -3,18 +3,24 @@
 import json
 import os
 import re
+import threading
 import unicodedata
+import weakref
 from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from decimal import Decimal, DecimalException
-from io import StringIO
+from io import StringIO, TextIOBase
 from itertools import count
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import TextIO
+from typing import BinaryIO, TextIO
 
 EDITOR_THRESHOLD = 10 * 1024 * 1024
 READ_CHUNK = 256 * 1024
+SIZE_CHUNK = 1024 * 1024
+MAX_PRECISE_DIGITS = 15
 MAX_ROWS = 1_048_576
 MAX_COLUMNS = 16_384
 MAX_TEXT = 32_767
@@ -27,23 +33,69 @@ Row = dict[int, Cell]
 
 
 class DiskRows:
-    """Reusable, sparse rows backed by an automatically removed temporary file."""
+    """Reusable, sparse rows backed by an automatically removed temporary file.
 
-    def __init__(self, file: TextIO, count: int, columns: list[int]):
+    Every iteration keeps its own read offset, so several iterations (preview,
+    export, a second export) can run at the same time, even on different
+    threads, without moving each other's position. The file is released by
+    ``close()``, by leaving a ``with`` block, or at the latest when the object
+    is collected or the interpreter exits.
+    """
+
+    def __init__(self, file: BinaryIO | TextIO, count: int, columns: list[int]):
+        if isinstance(file, TextIOBase):
+            file.flush()
+            raw = file.buffer
+        else:
+            raw = file
         self.file = file
         self.count = count
         self.columns = columns
+        self._raw = raw
+        self._lock = threading.Lock()
+        self._finalizer = weakref.finalize(self, file.close)
 
     def __len__(self) -> int:
         return self.count
 
-    def __iter__(self) -> Iterator[Row]:
-        self.file.seek(0)
-        for line in self.file:
-            yield {self.columns[column]: value for column, value in json.loads(line)}
+    @property
+    def closed(self) -> bool:
+        return not self._finalizer.alive
 
-    def __del__(self):
-        self.file.close()
+    def close(self) -> None:
+        with self._lock:
+            self._finalizer()
+
+    def __enter__(self) -> "DiskRows":
+        return self
+
+    def __exit__(self, *_exc_info) -> None:
+        self.close()
+
+    def _read_at(self, offset: int) -> bytes:
+        with self._lock:
+            if not self._finalizer.alive:
+                raise ValueError("DiskRows is closed")
+            self._raw.seek(offset)
+            return self._raw.read(READ_CHUNK)
+
+    def _row(self, line: bytearray) -> Row:
+        return {self.columns[column]: value for column, value in json.loads(line)}
+
+    def __iter__(self) -> Iterator[Row]:
+        offset = 0
+        pending = bytearray()
+        while chunk := self._read_at(offset):
+            offset += len(chunk)
+            start = 0
+            while (end := chunk.find(b"\n", start)) != -1:
+                pending += chunk[start:end]
+                yield self._row(pending)
+                pending.clear()
+                start = end + 1
+            pending += chunk[start:]
+        if pending:
+            yield self._row(pending)
 
 
 class ConversionError(ValueError):
@@ -58,14 +110,68 @@ class ExtraJsonData(ConversionError):
         super().__init__("invalid_record", record=1)
 
 
+class Cancelled(ConversionError):
+    """The user stopped the running job; nothing was written."""
+
+    def __init__(self):
+        super().__init__("cancelled")
+
+
+_CANCEL: ContextVar[threading.Event | None] = ContextVar("tablyfern_cancel", default=None)
+
+
+@contextmanager
+def cancellation(event: threading.Event):
+    """Let ``checkpoint()`` calls in this thread stop once ``event`` is set."""
+    token = _CANCEL.set(event)
+    try:
+        yield
+    finally:
+        _CANCEL.reset(token)
+
+
+def checkpoint() -> None:
+    event = _CANCEL.get()
+    if event is not None and event.is_set():
+        raise Cancelled()
+
+
+def exceeds_editor_limit(source: str, limit: int | None = None) -> bool:
+    """Compare text by its UTF-8 size, the same unit file sizes use."""
+    if limit is None:
+        limit = EDITOR_THRESHOLD
+    if len(source) > limit:
+        return True
+    if len(source) * 4 <= limit:
+        return False
+    size = 0
+    for start in range(0, len(source), SIZE_CHUNK):
+        size += len(source[start:start + SIZE_CHUNK].encode("utf-8", "surrogatepass"))
+        if size > limit:
+            return True
+    return False
+
+
+def _significant_digits(value: Decimal) -> int:
+    digits = value.as_tuple().digits
+    significant = len(digits)
+    while significant > 1 and digits[significant - 1] == 0:
+        significant -= 1
+    return significant
+
+
 @dataclass(frozen=True)
 class JsonNumber:
     literal: str
 
     def to_cell(self) -> Cell:
+        # Decide by the numeric value, not by how it was written: 1e16,
+        # 1.0e16 and 10000000000000000 are the same number and get the same
+        # cell type. Trailing zeros are not significant, so they are dropped
+        # without Decimal.normalize(), which would round to the context precision.
         try:
             value = Decimal(self.literal)
-            if len(value.as_tuple().digits) <= 15 and (
+            if value.is_finite() and _significant_digits(value) <= MAX_PRECISE_DIGITS and (
                 not value or MIN_EXCEL_NUMBER <= value.copy_abs() <= MAX_EXCEL_NUMBER
             ):
                 return float(value)
@@ -78,6 +184,11 @@ class JsonNumber:
 class Table:
     headers: tuple[str, ...]
     rows: list[Row] | DiskRows
+
+    def close(self) -> None:
+        """Release the temporary file behind large tables. Safe to call twice."""
+        if isinstance(self.rows, DiskRows):
+            self.rows.close()
 
 
 @dataclass(frozen=True)
@@ -121,14 +232,22 @@ def _sheet_name(stem: str, used: set[str]) -> str:
 def read_batch(paths: list[Path]) -> list[BatchSheet]:
     used = {"history"}
     sheets = []
-    for path in paths:
-        try:
-            source, table = read_table_file(path, editor_limit=1024 * 1024)
-        except ConversionError as exc:
-            raise BatchInputError(path, exc) from exc
-        except OSError as exc:
-            raise BatchInputError(path, ConversionError("read")) from exc
-        sheets.append(BatchSheet(path, _sheet_name(path.stem, used), source, table))
+    try:
+        for path in paths:
+            checkpoint()
+            try:
+                source, table = read_table_file(path, editor_limit=1024 * 1024)
+            except Cancelled:
+                raise
+            except ConversionError as exc:
+                raise BatchInputError(path, exc) from exc
+            except OSError as exc:
+                raise BatchInputError(path, ConversionError("read")) from exc
+            sheets.append(BatchSheet(path, _sheet_name(path.stem, used), source, table))
+    except BaseException:
+        for sheet in sheets:
+            sheet.table.close()
+        raise
     return sheets
 
 
@@ -220,6 +339,7 @@ def _load_lines(source: str) -> list:
     for number, line in enumerate(source.removesuffix("\n").split("\n"), start=1):
         if number >= MAX_ROWS:
             raise ConversionError("rows")
+        checkpoint()
         records.append(_load_line(line, number))
     return records
 
@@ -227,7 +347,7 @@ def _load_lines(source: str) -> list:
 def parse_table(source: str, mode: str = "json") -> Table:
     try:
         source = source.removeprefix("\ufeff")
-        if len(source) > EDITOR_THRESHOLD:
+        if exceeds_editor_limit(source):
             with StringIO(source, newline="\n") as stream:
                 return _stream_table(stream, mode)
         if mode == "jsonl":
@@ -313,6 +433,7 @@ class JsonRecords:
             self.pos += 1
         else:
             for number in count(1):
+                checkpoint()
                 self.peek()
                 yield self.value(number)
                 delimiter = self.peek()
@@ -329,6 +450,7 @@ def _stream_lines(stream: TextIO) -> Iterator[object]:
     for number, line in enumerate(stream, start=1):
         if number >= MAX_ROWS:
             raise ConversionError("rows")
+        checkpoint()
         yield _load_line(line, number)
 
 
@@ -423,6 +545,7 @@ def _rows(
     for row_number, record in enumerate(records, start=2):
         if row_number > MAX_ROWS:
             raise ConversionError("rows")
+        checkpoint()
         if object_records and not isinstance(record, dict):
             raise ConversionError("source_changed")
         fields = _flatten(record) if object_records else (("value", record),)
@@ -446,15 +569,16 @@ def _rows(
 
 def _spool_table(records: Iterable[object], object_records: bool) -> Table:
     try:
-        file = TemporaryFile(mode="w+t", encoding="utf-8", newline="\n")
+        file = TemporaryFile(mode="w+b")
     except OSError as exc:
         raise ConversionError("scratch") from exc
     columns: dict[str, list[int]] = {}
     count = 0
     try:
         for count, row in enumerate(_rows(records, columns, object_records), start=1):
+            line = json.dumps(list(row.items()), ensure_ascii=False, separators=(",", ":")) + "\n"
             try:
-                file.write(json.dumps(list(row.items()), ensure_ascii=False, separators=(",", ":")) + "\n")
+                file.write(line.encode("utf-8"))
             except OSError as exc:
                 raise ConversionError("scratch") from exc
         try:

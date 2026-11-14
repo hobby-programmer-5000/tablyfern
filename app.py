@@ -2,10 +2,11 @@
 
 import json
 import sys
+import threading
 from itertools import islice
 from pathlib import Path
 
-from PySide6.QtCore import QThread, Qt, Slot
+from PySide6.QtCore import QThread, QTimer, Qt, Slot
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
     QFileDialog,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSplitter,
@@ -25,15 +27,17 @@ from PySide6.QtWidgets import (
 )
 
 from converter import (
-    EDITOR_THRESHOLD,
     MAX_COLUMNS,
     MAX_LINE_FEEDS,
     MAX_ROWS,
     MAX_TEXT,
     BatchInputError,
     BatchSheet,
+    Cancelled,
     ConversionError,
     Table,
+    cancellation,
+    exceeds_editor_limit,
     input_mode_for,
     parse_table,
     read_batch,
@@ -103,6 +107,20 @@ MESSAGES = {
     "workbook_size": ("The workbook exceeds the output package size limit. Export fewer records at a time.", "통합 문서가 출력 패키지 크기 한도를 초과했습니다. 레코드를 나눠 저장하세요."),
     "batch_empty": ("Select at least one input file.", "입력 파일을 하나 이상 선택하세요."),
     "batch_format": ("Choose a workbook format for multiple tabs.", "여러 탭을 저장할 수 있는 통합 문서 형식을 선택하세요."),
+    "locked": (
+        "Could not write {name}. Close it in Excel or another program, or check that the folder is writable, then retry.",
+        "{name}에 쓸 수 없습니다. 엑셀 등 다른 프로그램에서 파일을 닫거나 폴더 쓰기 권한을 확인한 뒤 다시 시도하세요.",
+    ),
+    "cancel": ("Cancel", "취소"),
+    "cancelling": ("Cancelling… Temporary files are being removed.", "취소하는 중… 임시 파일을 정리하고 있습니다."),
+    "cancelled": ("Cancelled. No file was changed.", "취소했습니다. 변경된 파일은 없습니다."),
+    "quit_title": ("Task in progress", "작업 진행 중"),
+    "quit_prompt": (
+        "A file is still being read or saved. Cancel it and quit? Files being saved are left unchanged.",
+        "파일을 읽거나 저장하는 중입니다. 작업을 취소하고 종료할까요? 저장 중이던 파일은 바뀌지 않습니다.",
+    ),
+    "quit_confirm": ("Cancel and quit", "취소하고 종료"),
+    "keep_working": ("Keep working", "계속 진행"),
 }
 
 LIMITS = (
@@ -139,12 +157,28 @@ class FileJob(QThread):
         self.fallback = fallback
         self.result = None
         self.error = None
+        self.cancel_event = threading.Event()
+
+    def cancel(self) -> None:
+        self.cancel_event.set()
 
     def run(self):
         try:
-            self.result = self.action()
+            with cancellation(self.cancel_event):
+                self.result = self.action()
         except Exception as exc:
             self.error = exc
+
+
+def tables_in(result) -> list[Table]:
+    """Tables produced by a job result, so a discarded result can be released."""
+    if isinstance(result, Table):
+        return [result]
+    if isinstance(result, tuple):
+        return [item for item in result if isinstance(item, Table)]
+    if isinstance(result, list):
+        return [item.table for item in result if isinstance(item, BatchSheet)]
+    return []
 
 
 class Window(QWidget):
@@ -157,14 +191,23 @@ class Window(QWidget):
         self.batch: list[BatchSheet] = []
         self.file_table: Table | None = None
         self.job: FileJob | None = None
+        self.quit_requested = False
+        self.held_tables: dict[int, Table] = {}
         self.source_name = "tablyfern"
         self.status_key = "ready"
         self.status_values = {}
         self.status_error = False
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(24, 20, 24, 20)
+        outer.setSpacing(12)
+        # Everything except the status line and the cancel button is disabled
+        # while a job runs, so the job can always be cancelled.
+        self.content = QWidget()
+        layout = QVBoxLayout(self.content)
+        layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
+        outer.addWidget(self.content, 1)
         heading = QHBoxLayout()
         title = QLabel("Tablyfern")
         font = title.font()
@@ -233,10 +276,17 @@ class Window(QWidget):
         split.setSizes([220, 300])
         layout.addWidget(split, 1)
 
+        footer = QHBoxLayout()
         self.status = QLabel()
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
-        layout.addWidget(self.status)
+        footer.addWidget(self.status, 1)
+        self.cancel_button = QPushButton()
+        self.cancel_button.setMinimumHeight(32)
+        self.cancel_button.clicked.connect(self.cancel_job)
+        self.cancel_button.hide()
+        footer.addWidget(self.cancel_button)
+        outer.addLayout(footer)
         self.language.currentIndexChanged.connect(self.translate)
         self.translate()
 
@@ -272,6 +322,7 @@ class Window(QWidget):
         self.grid.setAccessibleName(self.text("table"))
         for key, button in self.buttons.items():
             button.setText(self.text(key))
+        self.cancel_button.setText(self.text("cancel"))
         self.buttons["export"].setEnabled(self.table is not None)
         if self.file_table is not None or (
             self.batch and self.batch[self.batch_picker.currentIndex()].source is None
@@ -317,11 +368,26 @@ class Window(QWidget):
         if self.batch or self.file_table is not None:
             return
         self.table = None
+        self.release_unused_tables()
         self.grid.clear()
         self.grid.setRowCount(0)
         self.grid.setColumnCount(0)
         self.buttons["export"].setEnabled(False)
         self.show_status("edited")
+
+    def release_unused_tables(self) -> None:
+        """Close the temporary files of tables the window no longer shows or exports."""
+        live = [self.table, self.file_table, *(item.table for item in self.batch)]
+        live = {id(table): table for table in live if table is not None}
+        for key, table in self.held_tables.items():
+            if key not in live:
+                table.close()
+        self.held_tables = live
+
+    def release_all_tables(self) -> None:
+        for table in self.held_tables.values():
+            table.close()
+        self.held_tables = {}
 
     def open_json(self) -> None:
         filename, _ = QFileDialog.getOpenFileName(self, self.text("open"), "", self.text("json_filter"))
@@ -370,6 +436,7 @@ class Window(QWidget):
         self.input_mode.setVisible(not batch)
         self.editor.setReadOnly(bool(batch))
         self.set_output_formats(WORKBOOK_FORMATS if batch else FORMATS)
+        self.release_unused_tables()
 
     def open_batch(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(self, self.text("open_batch"), "", self.text("json_filter"))
@@ -402,7 +469,9 @@ class Window(QWidget):
         self.invalidate_preview()
         source = self.editor.toPlainText()
         mode = self.input_mode.currentData()
-        if len(source) > EDITOR_THRESHOLD:
+        # Measured in UTF-8 bytes: 10 MiB of Korean text is about 3.5 million
+        # characters, so a character count would keep up to ~30 MB on this thread.
+        if exceeds_editor_limit(source):
             self.start_job("loading", lambda: parse_table(source, mode), self.show_table, "read")
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
@@ -438,6 +507,7 @@ class Window(QWidget):
                         display = str(value)
                     self.grid.setItem(row_number, column, QTableWidgetItem(display))
         self.table = table
+        self.release_unused_tables()
         self.buttons["export"].setEnabled(True)
 
     def export(self) -> None:
@@ -468,16 +538,37 @@ class Window(QWidget):
         job = FileJob(action, on_success, fallback, self)
         self.job = job
         self.show_status(status)
-        self.setEnabled(False)
+        self.content.setEnabled(False)
+        self.cancel_button.setEnabled(True)
+        self.cancel_button.show()
         job.finished.connect(self.finish_job)
         job.start()
+
+    @Slot()
+    def cancel_job(self) -> None:
+        if self.job is None:
+            return
+        self.job.cancel()
+        self.cancel_button.setEnabled(False)
+        self.show_status("cancelling")
 
     @Slot()
     def finish_job(self) -> None:
         job = self.job
         self.job = None
-        self.setEnabled(True)
-        if isinstance(job.error, BatchInputError):
+        self.cancel_button.hide()
+        self.content.setEnabled(True)
+        job.deleteLater()
+        if self.quit_requested:
+            for table in tables_in(job.result):
+                table.close()
+            QTimer.singleShot(0, self.close)
+            return
+        # A job that completed before it reached a checkpoint has finished its
+        # work (a save has already replaced the file), so it reports success.
+        if isinstance(job.error, Cancelled):
+            self.show_status("cancelled")
+        elif isinstance(job.error, BatchInputError):
             self.show_status("batch_failure", error=True, name=job.error.path.name, issue=job.error.issue)
         elif isinstance(job.error, ConversionError):
             self.show_status(job.error.code, error=True, **job.error.details)
@@ -485,13 +576,39 @@ class Window(QWidget):
             self.show_status(job.fallback, error=True)
         else:
             job.on_success(job.result)
-        job.deleteLater()
+
+    def confirm_quit(self) -> bool:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle(self.text("quit_title"))
+        box.setText(self.text("quit_prompt"))
+        quit_button = box.addButton(self.text("quit_confirm"), QMessageBox.ButtonRole.DestructiveRole)
+        keep = box.addButton(self.text("keep_working"), QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(keep)
+        box.setEscapeButton(keep)
+        box.exec()
+        return box.clickedButton() is quit_button
 
     def closeEvent(self, event) -> None:
         if self.job is not None:
+            # The worker thread must finish before the window and its QThread go
+            # away. It stops at its next checkpoint, removes its temporary files
+            # and finish_job() closes the window again.
             event.ignore()
-        else:
-            super().closeEvent(event)
+            if self.quit_requested:
+                self.show_status("cancelling")
+                return
+            if not self.confirm_quit():
+                return
+            if self.job is None:
+                # The job finished while the question was open.
+                QTimer.singleShot(0, self.close)
+                return
+            self.quit_requested = True
+            self.cancel_job()
+            return
+        self.release_all_tables()
+        super().closeEvent(event)
 
 
 def main() -> int:
