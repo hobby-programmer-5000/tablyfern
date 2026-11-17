@@ -6,18 +6,18 @@ Tablyfern은 JSON과 JSONL을 시트 한 장이나 구분자 텍스트 파일로
 
 ![파일 세 개를 열고 주문 탭을 미리 보는 Tablyfern 화면](docs/demo-ko.png)
 
-대용량 처리와 **사용 한도** 창은 [v0.2.0](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.2.0)에서 사용할 수 있습니다. v0.1.0 배포 ZIP에는 입력 파일당 10 MiB 한도가 적용됩니다.
+위 이미지는 소스 버전의 화면입니다. [v0.2.0 배포 ZIP](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.2.0)에도 대용량 처리와 **사용 한도** 창이 있으며, 이전 화면에서는 **표 미리보기** 버튼이 항상 표시됩니다. v0.1.0 배포 ZIP에는 입력 파일당 10 MiB 한도가 적용됩니다.
 
 1. [GitHub 릴리스](https://github.com/hobby-programmer-5000/tablyfern/releases)에서 Windows x64 ZIP을 받아 전체 폴더를 압축 해제한 뒤 **Tablyfern.exe**를 실행합니다. EXE 옆의 `_internal` 폴더도 함께 둡니다. 소스에서 실행하려면 Python 3.12–3.14 환경에서 저장소 루트를 열고 `python -m pip install -r requirements.txt`를 실행한 뒤 `python app.py` 또는 [run.bat](run.bat)을 실행합니다.
 2. 언어 메뉴에서 **한국어**를 선택합니다. **JSON 열기…**를 누르거나 편집기에 데이터를 붙여넣습니다. **예제 불러오기**로 시작할 수도 있습니다.
-3. 내용을 편집했다면 **표 미리보기**를 누릅니다. 출력 형식을 선택하고 **파일 저장…**을 누르면 전체 표가 저장됩니다.
+3. 파일을 열면 표가 자동으로 표시됩니다. 데이터를 붙여넣거나 고쳤다면 **미리보기 갱신**을 누르거나 **Ctrl+Enter**를 사용하세요. 하단에서 출력 형식을 고르고 **파일 저장…**을 누르면 전체 표가 저장됩니다.
 
 Windows 빌드는 시스템 Visual C++ 런타임을 사용합니다. Windows에서 `VCRUNTIME` 또는 `MSVCP` DLL을 찾지 못한다면 Microsoft의 [최신 지원 x64 Visual C++ 재배포 가능 패키지](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)를 설치하세요.
 
 ## 여러 파일을 통합 문서 하나로 저장하기
 
 1. **여러 파일 열기…**를 눌러 JSON, JSONL 또는 NDJSON 파일을 선택합니다. 파일 선택 창에서 전달한 순서대로 파일 하나당 탭 하나가 만들어집니다.
-2. JSON 입력 위의 메뉴에서 탭을 골라 미리 봅니다. 탭 이름에는 파일명을 쓰며, [Excel 탭 이름 규칙](https://support.microsoft.com/en-gb/excel/rename-a-worksheet)에 맞게 조정하고 이름이 겹치면 번호를 붙입니다.
+2. 미리보기 영역의 **통합 문서 탭** 메뉴에서 시트를 골라 봅니다. 파일명을 Excel 규칙에 맞게 조정해 탭 이름으로 쓰고, 이름이 겹치면 번호를 붙입니다. [Excel 탭 이름 규칙](https://support.microsoft.com/en-gb/excel/rename-a-worksheet)
 3. XLSX, XLSM, XLTX, XLTM, ODS 중 하나를 골라 **파일 저장…**을 누르면 탭 전체가 함께 저장됩니다. CSV와 TSV는 파일 하나를 변환할 때 선택할 수 있습니다.
 
 읽거나 해석할 수 없는 파일이 있으면 파일명과 원인을 표시하고 이전 미리보기를 유지합니다. 다시 단일 입력을 편집하려면 **JSON 열기…**나 **예제 불러오기**를 누르세요.
@@ -65,4 +65,4 @@ Windows x64에서 1,073,745,005바이트짜리 가상 JSONL을 XLSX로 저장하
 
 ## 라이선스
 
-앱 원본 코드와 샘플에는 [MIT](LICENSE)를 적용합니다. 함께 제공하는 구성 요소는 각자 라이선스를 따릅니다. [제3자 고지](THIRD-PARTY-NOTICES.ko.md) · [기여자](CONTRIBUTORS.ko.md)
+앱 원본 코드와 샘플에는 [MIT](LICENSE)를 적용합니다. 화면 아이콘은 Lucide Contributors가 제작했으며 일부는 Cole Bemis의 Feather에서 유래했습니다. 함께 제공하는 구성 요소는 각자 라이선스를 따릅니다. [제3자 고지](THIRD-PARTY-NOTICES.ko.md) · [기여자](CONTRIBUTORS.ko.md)

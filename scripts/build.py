@@ -15,7 +15,7 @@ from zipfile import ZipFile
 
 ROOT = Path(__file__).resolve().parent.parent
 VERSION = runpy.run_path(str(ROOT / "version.py"))["VERSION"]
-APP_MODULES = ("app.py", "converter.py", "exporters.py", "version.py")
+APP_MODULES = ("app.py", "converter.py", "exporters.py", "ui_theme.py", "version.py")
 DEPENDENCIES = (
     "PySide6-Essentials", "shiboken6", "XlsxWriter", "PyInstaller",
     "pyinstaller-hooks-contrib", "altgraph", "packaging", "pefile", "pywin32-ctypes", "setuptools",
@@ -105,7 +105,7 @@ def build(dist: Path) -> None:
         "THIRD-PARTY-NOTICES.md", "THIRD-PARTY-NOTICES.ko.md",
     ):
         shutil.copy2(ROOT / name, output / name)
-    for name in ("docs", "samples", "licenses"):
+    for name in ("assets", "docs", "samples", "licenses"):
         shutil.copytree(ROOT / name, output / name)
     build_info = {
         "app": "Tablyfern", "version": VERSION, "platform": "Windows x64",

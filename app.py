@@ -6,7 +6,8 @@ import threading
 from itertools import islice
 from pathlib import Path
 
-from PySide6.QtCore import QThread, QTimer, Qt, Slot
+from PySide6.QtCore import QSize, QThread, QTimer, Qt, Slot
+from PySide6.QtGui import QFontDatabase, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -14,12 +15,16 @@ from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSplitter,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -44,6 +49,7 @@ from converter import (
     read_table_file,
 )
 from exporters import FORMATS, WORKBOOK_FORMATS, save_table, save_workbook
+from ui_theme import ICON_DIR, LIGHT_STYLE, stock_icon, use_light_style
 from version import VERSION
 
 PREVIEW_ROWS = 50
@@ -54,24 +60,27 @@ EXAMPLE = """[
 ]"""
 
 MESSAGES = {
-    "tagline": ("Convert JSON and JSON Lines to spreadsheets on this device.", "이 기기에서 JSON과 JSONL을 스프레드시트로 변환합니다."),
+    "tagline": ("JSON & JSON Lines to spreadsheets", "JSON과 JSONL을 스프레드시트로 변환"),
     "language": ("Language", "언어"),
     "limits": ("Limits", "사용 한도"),
     "close": ("Close", "닫기"),
     "open": ("Open JSON…", "JSON 열기…"),
     "open_batch": ("Open multiple…", "여러 파일 열기…"),
     "sample": ("Load example", "예제 불러오기"),
-    "preview": ("Preview table", "표 미리보기"),
+    "preview": ("Update preview", "미리보기 갱신"),
     "export": ("Save file…", "파일 저장…"),
     "input": ("JSON input", "JSON 입력"),
     "table": ("Table preview", "표 미리보기"),
     "input_mode": ("Input format", "입력 형식"),
-    "batch_picker": ("Choose a tab to preview", "미리 볼 탭 선택"),
+    "batch_picker": ("Workbook tab", "통합 문서 탭"),
     "auto": ("Detect input", "입력 자동 감지"),
     "output_format": ("Output format", "출력 형식"),
-    "placeholder": ("Paste JSON or JSON Lines, or open a UTF-8 file.", "JSON 또는 JSONL을 붙여넣거나 UTF-8 파일을 여세요."),
-    "ready": ("Open a JSON or JSONL file, or paste data to begin.", "JSON 또는 JSONL 파일을 열거나 데이터를 붙여넣으세요."),
-    "edited": ("Preview the current JSON before saving.", "저장하기 전에 현재 JSON을 미리 확인하세요."),
+    "placeholder": ("Paste or type JSON or JSON Lines here.", "여기에 JSON 또는 JSONL을 붙여넣거나 입력하세요."),
+    "empty_preview": ("Open a file or paste JSON to see its table here.", "파일을 열거나 JSON을 붙여넣으면 여기에 표가 표시됩니다."),
+    "ready": ("Ready", "준비"),
+    "edited": ("Input changed · Preview required to save", "입력 변경됨 · 저장하려면 미리보기 갱신 필요"),
+    "pending_preview": ("Update the preview to see the table.", "미리보기를 갱신하면 표가 표시됩니다."),
+    "error_status": ("Error · {message}", "오류 · {message}"),
     "summary": ("Rows {rows:,} · Columns {columns:,}", "{rows:,}행 · {columns:,}열"),
     "batch_summary": ("{count} tabs · {name} · Rows {rows:,} · Columns {columns:,}", "{count}개 탭 · {name} · {rows:,}행 · {columns:,}열"),
     "partial": (" · Preview shows {shown_rows:,} rows × {shown_columns:,} columns", " · 미리보기 {shown_rows:,}행 × {shown_columns:,}열 표시"),
@@ -99,8 +108,9 @@ MESSAGES = {
     "ods_character": ("ODS cannot store a character in {sheet}, row {row}, column {column}. Edit it or choose Excel format.", "ODS가 {sheet} 탭 {row}행 {column}열의 문자를 저장할 수 없습니다. 해당 문자를 편집하거나 Excel 형식을 선택하세요."),
     "batch_failure": ("Could not load the selection. {name} · {reason}", "선택한 파일을 불러오지 못했습니다. {name} · {reason}"),
     "loading": ("Reading and preparing the file…", "파일을 읽고 표를 만드는 중…"),
+    "preparing": ("Preparing the preview…", "미리보기를 만드는 중…"),
     "saving": ("Writing the output file…", "출력 파일을 저장하는 중…"),
-    "stream_notice": ("This file is processed on disk. Use the table preview below.", "이 파일은 디스크에서 처리합니다. 아래 표 미리보기에서 확인하세요."),
+    "stream_notice": ("This file is processed on disk. View the result in Table preview.", "이 파일은 디스크에서 처리합니다. 결과는 표 미리보기에서 확인하세요."),
     "invalid_record": ("Invalid JSON near record {record}. Check the source syntax.", "{record}번째 레코드 부근에 JSON 형식 오류가 있습니다. 원본 문법을 확인하세요."),
     "source_changed": ("The input changed while being read. Open it again.", "읽는 동안 입력 파일이 바뀌었습니다. 다시 열어 주세요."),
     "scratch": ("Could not write temporary data. Check available disk space.", "임시 데이터를 쓸 수 없습니다. 디스크 여유 공간을 확인하세요."),
@@ -184,9 +194,14 @@ def tables_in(result) -> list[Table]:
 class Window(QWidget):
     def __init__(self):
         super().__init__()
+        self.setObjectName("workspace")
         self.setWindowTitle("Tablyfern")
-        self.setMinimumSize(640, 460)
-        self.resize(960, 700)
+        body_font = self.font()
+        body_font.setFamilies(["Segoe UI Variable Text", "Segoe UI", body_font.family()])
+        body_font.setPointSizeF(max(10.5, body_font.pointSizeF()))
+        self.setFont(body_font)
+        self.setMinimumSize(640, 520)
+        self.resize(1120, 720)
         self.table: Table | None = None
         self.batch: list[BatchSheet] = []
         self.file_table: Table | None = None
@@ -200,35 +215,46 @@ class Window(QWidget):
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(24, 20, 24, 20)
-        outer.setSpacing(12)
-        # Everything except the status line and the cancel button is disabled
-        # while a job runs, so the job can always be cancelled.
+        outer.setSpacing(16)
         self.content = QWidget()
         layout = QVBoxLayout(self.content)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(12)
+        layout.setSpacing(16)
         outer.addWidget(self.content, 1)
         heading = QHBoxLayout()
+        heading.setSpacing(8)
+        self.brand = QLabel()
+        self.brand.setObjectName("brandMark")
+        self.brand.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.brand.setFixedSize(32, 40)
+        heading.addWidget(self.brand)
+        branding = QVBoxLayout()
+        branding.setSpacing(0)
         title = QLabel("Tablyfern")
-        font = title.font()
-        font.setPointSize(24)
-        font.setBold(True)
-        title.setFont(font)
-        heading.addWidget(title)
+        title.setObjectName("appTitle")
+        self.emphasize(title, 18)
+        branding.addWidget(title)
+        self.tagline = QLabel()
+        self.tagline.setProperty("muted", True)
+        branding.addWidget(self.tagline)
+        heading.addLayout(branding)
         heading.addStretch()
         self.limits_button = QPushButton()
+        self.limits_button.setProperty("quiet", True)
+        self.style_button(self.limits_button)
         self.limits_button.clicked.connect(self.show_limits)
         heading.addWidget(self.limits_button)
         self.language = QComboBox()
+        self.style_combo(self.language)
         self.language.addItems(["English", "한국어"])
         heading.addWidget(self.language)
         layout.addLayout(heading)
-        self.tagline = QLabel()
-        layout.addWidget(self.tagline)
 
         actions = QHBoxLayout()
+        actions.setSpacing(8)
         self.buttons = {}
         self.output_format = QComboBox()
+        self.style_combo(self.output_format)
         self.set_output_formats(FORMATS)
         for key, action in (
             ("open", self.open_json),
@@ -237,72 +263,200 @@ class Window(QWidget):
             ("preview", self.update_preview),
             ("export", self.export),
         ):
-            if key == "export":
-                actions.addStretch()
-                actions.addWidget(self.output_format)
             button = QPushButton()
+            self.style_button(button)
             button.clicked.connect(action)
-            button.setMinimumHeight(32)
             self.buttons[key] = button
+        self.buttons["open"].setObjectName("openButton")
+        self.buttons["export"].setObjectName("exportButton")
+        self.buttons["sample"].setProperty("quiet", True)
+        for key in ("open", "open_batch", "sample"):
+            button = self.buttons[key]
             actions.addWidget(button)
+        actions.addStretch()
         layout.addLayout(actions)
 
-        split = QSplitter(Qt.Orientation.Vertical)
+        self.split = QSplitter(Qt.Orientation.Horizontal)
+        self.split.setHandleWidth(12)
+        self.split.setChildrenCollapsible(False)
         self.editor = QPlainTextEdit()
+        self.editor.setObjectName("sourceEditor")
+        editor_font = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont)
+        editor_font.setFamilies(["Consolas", editor_font.family()])
+        editor_font.setPointSizeF(body_font.pointSizeF())
+        self.editor.setFont(editor_font)
+        self.editor.setMinimumHeight(64)
+        self.editor.setTabChangesFocus(True)
         self.editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self.editor.textChanged.connect(self.invalidate_preview)
         self.input_label = QLabel()
         self.input_label.setBuddy(self.editor)
         self.input_mode = QComboBox()
+        self.style_combo(self.input_mode)
         self.input_mode.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         for label, mode in (("", "auto"), ("JSON", "json"), ("JSONL", "jsonl")):
             self.input_mode.addItem(label, mode)
         self.input_mode.currentIndexChanged.connect(self.invalidate_preview)
         self.batch_picker = QComboBox()
-        self.batch_picker.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.batch_picker.setMaximumWidth(340)
+        self.style_combo(self.batch_picker)
+        self.batch_picker.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.batch_picker.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.batch_picker.setMinimumContentsLength(8)
         self.batch_picker.currentIndexChanged.connect(self.update_preview)
-        self.batch_picker.hide()
-        split.addWidget(self.panel(self.input_label, self.editor, self.input_mode, self.batch_picker))
+        self.split.addWidget(self.panel(self.input_label, self.editor, self.input_mode))
 
         self.grid = QTableWidget()
+        self.grid.setObjectName("previewGrid")
         self.grid.setAlternatingRowColors(True)
+        self.grid.setShowGrid(False)
+        self.grid.setTabKeyNavigation(False)
         self.grid.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.grid.horizontalHeader().setDefaultSectionSize(145)
+        self.grid.verticalHeader().setDefaultSectionSize(36)
+        self.grid.horizontalHeader().setDefaultSectionSize(128)
+        self.grid.horizontalHeader().setDefaultAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         self.table_label = QLabel()
         self.table_label.setBuddy(self.grid)
-        split.addWidget(self.panel(self.table_label, self.grid))
-        split.setChildrenCollapsible(False)
-        split.setSizes([220, 300])
-        layout.addWidget(split, 1)
+
+        self.empty_preview = QLabel()
+        self.empty_preview.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.empty_preview.setWordWrap(True)
+        self.empty_preview.setMargin(12)
+        self.empty_preview.setProperty("muted", True)
+        self.preview_stack = QStackedWidget()
+        self.preview_stack.setObjectName("previewStack")
+        self.preview_stack.addWidget(self.empty_preview)
+        self.preview_stack.addWidget(self.grid)
+        self.preview_stack.setMinimumHeight(86)
+        self.batch_label = QLabel()
+        self.batch_label.setBuddy(self.batch_picker)
+        self.sheet_selector = QWidget()
+        sheets = QHBoxLayout(self.sheet_selector)
+        sheets.setContentsMargins(0, 0, 0, 0)
+        sheets.addWidget(self.batch_label)
+        sheets.addWidget(self.batch_picker)
+        self.sheet_selector.hide()
+        self.split.addWidget(self.panel(
+            self.table_label, self.preview_stack, self.buttons["preview"], self.sheet_selector,
+        ))
+        self.split.setStretchFactor(0, 1)
+        self.split.setStretchFactor(1, 1)
+        self.split.setSizes([380, 620])
+        layout.addWidget(self.split, 1)
 
         footer = QHBoxLayout()
+        footer.setSpacing(12)
         self.status = QLabel()
+        self.status.setObjectName("statusLine")
         self.status.setTextFormat(Qt.TextFormat.PlainText)
         self.status.setWordWrap(True)
+        self.status.setMinimumWidth(160)
+        self.status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         footer.addWidget(self.status, 1)
         self.cancel_button = QPushButton()
-        self.cancel_button.setMinimumHeight(32)
+        self.style_button(self.cancel_button)
         self.cancel_button.clicked.connect(self.cancel_job)
         self.cancel_button.hide()
         footer.addWidget(self.cancel_button)
+        self.output_label = QLabel()
+        self.output_label.setObjectName("outputLabel")
+        self.output_label.setBuddy(self.output_format)
+        footer.addWidget(self.output_label)
+        footer.addWidget(self.output_format)
+        footer.addWidget(self.buttons["export"])
         outer.addLayout(footer)
+        self.busy = QProgressBar()
+        self.busy.setRange(0, 0)
+        self.busy.setTextVisible(False)
+        self.busy.setFixedHeight(4)
+        self.busy.hide()
+        outer.addWidget(self.busy)
+
+        self.shortcuts = {}
+        for key, sequence in (
+            ("open", QKeySequence.StandardKey.Open),
+            ("open_batch", "Ctrl+Shift+O"),
+            ("preview", "Ctrl+Return"),
+            ("export", QKeySequence.StandardKey.Save),
+        ):
+            shortcut = QShortcut(QKeySequence(sequence), self)
+            shortcut.activated.connect(self.buttons[key].click)
+            self.shortcuts[key] = shortcut
+        focus_order = (
+            self.limits_button, self.language, self.buttons["open"], self.buttons["open_batch"],
+            self.buttons["sample"], self.input_mode, self.editor, self.buttons["preview"],
+            self.batch_picker, self.grid, self.output_format, self.buttons["export"],
+        )
+        for previous, following in zip(focus_order, focus_order[1:]):
+            self.setTabOrder(previous, following)
+        hints = QApplication.styleHints()
+        hints.colorSchemeChanged.connect(self.apply_theme)
+        hints.accessibility().contrastPreferenceChanged.connect(self.apply_theme)
         self.language.currentIndexChanged.connect(self.translate)
+        self.apply_theme()
         self.translate()
+        self.editor.setFocus()
 
     @staticmethod
-    def panel(label: QLabel, content: QWidget, *controls: QWidget) -> QWidget:
-        panel = QWidget()
+    def emphasize(widget: QWidget, size: int | None = None) -> None:
+        font = widget.font()
+        font.setBold(True)
+        if size is not None:
+            font.setPointSize(size)
+        widget.setFont(font)
+
+    @staticmethod
+    def style_button(button: QPushButton) -> None:
+        button.setProperty("workspaceButton", True)
+        button.setMinimumHeight(36)
+        button.setIconSize(QSize(18, 18))
+
+    @staticmethod
+    def style_combo(combo: QComboBox) -> None:
+        combo.setProperty("workspaceCombo", True)
+        combo.setMinimumHeight(36)
+
+    @classmethod
+    def panel(cls, label: QLabel, content: QWidget, *controls: QWidget) -> QFrame:
+        panel = QFrame()
+        panel.setProperty("panel", True)
         layout = QVBoxLayout(panel)
-        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setSpacing(8)
         heading = QHBoxLayout()
+        label.setProperty("panelTitle", True)
+        label.setMinimumHeight(36)
+        cls.emphasize(label)
         heading.addWidget(label)
         heading.addStretch()
         for control in controls:
             heading.addWidget(control)
         layout.addLayout(heading)
-        layout.addWidget(content)
+        layout.addWidget(content, 1)
         return panel
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        compact = event.size().width() < 790
+        self.tagline.setVisible(not compact)
+        margin = 16 if compact else 24
+        self.layout().setContentsMargins(margin, 20, margin, 20)
+        self.layout().setSpacing(12 if compact else 16)
+        self.content.layout().setSpacing(12 if compact else 16)
+        orientation = Qt.Orientation.Vertical if compact else Qt.Orientation.Horizontal
+        if self.split.orientation() != orientation:
+            self.split.setOrientation(orientation)
+            extent = event.size().height() if orientation == Qt.Orientation.Vertical else event.size().width()
+            self.split.setSizes([extent * 38 // 100, extent * 62 // 100])
+
+    @Slot()
+    def apply_theme(self) -> None:
+        light = use_light_style()
+        self.setStyleSheet(LIGHT_STYLE.replace("${arrow}", (ICON_DIR / "chevron-down.svg").as_posix()) if light else "")
+        self.brand.setPixmap(stock_icon("sheet", light=light).pixmap(26, 26))
+        self.grid.setShowGrid(not light)
+        for key, icon in (("open", "folder-open"), ("open_batch", "files"),
+                          ("preview", "refresh-cw"), ("export", "save")):
+            self.buttons[key].setIcon(stock_icon(icon, light=light, inverse=key == "export"))
 
     def text(self, key: str, **values) -> str:
         return MESSAGES[key][self.language.currentIndex()].format(**values)
@@ -315,6 +469,8 @@ class Window(QWidget):
         self.input_mode.setItemText(0, self.text("auto"))
         self.input_mode.setAccessibleName(self.text("input_mode"))
         self.batch_picker.setAccessibleName(self.text("batch_picker"))
+        self.batch_label.setText(self.text("batch_picker"))
+        self.output_label.setText(self.text("output_format"))
         self.output_format.setAccessibleName(self.text("output_format"))
         self.editor.setAccessibleName(self.text("input"))
         self.editor.setPlaceholderText(self.text("placeholder"))
@@ -322,8 +478,10 @@ class Window(QWidget):
         self.grid.setAccessibleName(self.text("table"))
         for key, button in self.buttons.items():
             button.setText(self.text(key))
+            if key in self.shortcuts:
+                sequence = self.shortcuts[key].key().toString(QKeySequence.SequenceFormat.NativeText)
+                button.setToolTip(f"{button.text()} ({sequence})")
         self.cancel_button.setText(self.text("cancel"))
-        self.buttons["export"].setEnabled(self.table is not None)
         if self.file_table is not None or (
             self.batch and self.batch[self.batch_picker.currentIndex()].source is None
         ):
@@ -359,21 +517,49 @@ class Window(QWidget):
         if key in ("summary", "batch_summary"):
             if values["rows"] > PREVIEW_ROWS or values["columns"] > PREVIEW_COLUMNS:
                 message += self.text("partial", shown_rows=self.grid.rowCount(), shown_columns=self.grid.columnCount())
+        if error:
+            message = self.text("error_status", message=message)
+        if self.status.property("error") != error:
+            self.status.setProperty("error", error)
+            self.status.style().unpolish(self.status)
+            self.status.style().polish(self.status)
+            font = self.status.font()
+            font.setBold(error)
+            self.status.setFont(font)
         self.status.setText(message)
-        font = self.status.font()
-        font.setBold(error)
-        self.status.setFont(font)
+        self.sync_controls()
+
+    def sync_controls(self) -> None:
+        idle = self.job is None
+        has_table = self.table is not None
+        preview_needed = not has_table and not self.editor.isReadOnly() and not self.editor.document().isEmpty()
+        self.buttons["preview"].setVisible(preview_needed)
+        self.buttons["preview"].setEnabled(idle)
+        self.buttons["export"].setEnabled(idle and has_table)
+        for key in ("open", "open_batch", "sample"):
+            self.buttons[key].setEnabled(idle)
+        for control in (self.editor, self.input_mode, self.batch_picker, self.output_format, self.grid):
+            control.setEnabled(idle)
+        for key in self.shortcuts:
+            self.shortcuts[key].setEnabled(self.buttons[key].isEnabled() and not self.buttons[key].isHidden())
+        self.preview_stack.setCurrentWidget(self.grid if has_table else self.empty_preview)
+        empty_key = self.status_key if not idle else "pending_preview" if preview_needed else "empty_preview"
+        self.empty_preview.setText(self.text(empty_key))
+        self.busy.setAccessibleName(self.status.text() if not idle else "")
+        self.busy.setVisible(not idle)
 
     def invalidate_preview(self) -> None:
         if self.batch or self.file_table is not None:
             return
-        self.table = None
-        self.release_unused_tables()
-        self.grid.clear()
-        self.grid.setRowCount(0)
-        self.grid.setColumnCount(0)
-        self.buttons["export"].setEnabled(False)
-        self.show_status("edited")
+        if self.table is not None:
+            self.table = None
+            self.release_unused_tables()
+            self.grid.clear()
+            self.grid.setRowCount(0)
+            self.grid.setColumnCount(0)
+        key = "ready" if self.editor.document().isEmpty() else "edited"
+        if self.status_key != key:
+            self.show_status(key)
 
     def release_unused_tables(self) -> None:
         """Close the temporary files of tables the window no longer shows or exports."""
@@ -430,9 +616,9 @@ class Window(QWidget):
         self.batch_picker.blockSignals(True)
         self.batch_picker.clear()
         for item in batch:
-            self.batch_picker.addItem(item.path.name)
+            self.batch_picker.addItem(item.name)
         self.batch_picker.blockSignals(False)
-        self.batch_picker.setVisible(bool(batch))
+        self.sheet_selector.setVisible(bool(batch))
         self.input_mode.setVisible(not batch)
         self.editor.setReadOnly(bool(batch))
         self.set_output_formats(WORKBOOK_FORMATS if batch else FORMATS)
@@ -466,13 +652,13 @@ class Window(QWidget):
         if self.file_table is not None:
             self.show_table(self.file_table)
             return
+        focus_preview = self.buttons["preview"].hasFocus()
         self.invalidate_preview()
         source = self.editor.toPlainText()
         mode = self.input_mode.currentData()
-        # Measured in UTF-8 bytes: 10 MiB of Korean text is about 3.5 million
-        # characters, so a character count would keep up to ~30 MB on this thread.
         if exceeds_editor_limit(source):
-            self.start_job("loading", lambda: parse_table(source, mode), self.show_table, "read")
+            self.start_job("preparing", lambda: parse_table(source, mode),
+                           lambda table: self.show_table(table, focus_preview=focus_preview), "read")
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
@@ -483,11 +669,13 @@ class Window(QWidget):
         finally:
             QApplication.restoreOverrideCursor()
 
-        self.show_table(table)
+        self.show_table(table, focus_preview=focus_preview)
 
-    def show_table(self, table: Table) -> None:
+    def show_table(self, table: Table, *, focus_preview: bool = False) -> None:
         self.render_table(table)
         self.show_status("summary", rows=len(table.rows), columns=len(table.headers))
+        if focus_preview:
+            self.grid.setFocus()
 
     def render_table(self, table: Table) -> None:
         self.grid.clear()
@@ -495,6 +683,9 @@ class Window(QWidget):
         rows = list(islice(table.rows, PREVIEW_ROWS))
         self.grid.setColumnCount(len(headers))
         self.grid.setHorizontalHeaderLabels(headers)
+        metrics = self.grid.horizontalHeader().fontMetrics()
+        for column, header in enumerate(headers):
+            self.grid.setColumnWidth(column, min(240, max(104, metrics.horizontalAdvance(header) + 24)))
         self.grid.setRowCount(len(rows))
         for row_number, row in enumerate(rows):
             for column, value in row.items():
@@ -508,7 +699,6 @@ class Window(QWidget):
                     self.grid.setItem(row_number, column, QTableWidgetItem(display))
         self.table = table
         self.release_unused_tables()
-        self.buttons["export"].setEnabled(True)
 
     def export(self) -> None:
         if self.table is None:
@@ -627,6 +817,8 @@ def smoke_check(window: Window, output: Path) -> int:
     from zipfile import ZipFile
 
     if window.buttons["export"].isEnabled() or window.output_format.currentData() != ".xlsx":
+        return 1
+    if window.buttons["open"].icon().isNull() or window.brand.pixmap().isNull():
         return 1
     root = Path(sys.executable if getattr(sys, "frozen", False) else __file__).resolve().parent
     samples = root / "samples"

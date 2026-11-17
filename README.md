@@ -6,18 +6,18 @@ Tablyfern is a local Windows tool that converts JSON and JSON Lines into one wor
 
 ![Tablyfern previews an orders tab from a three-file workbook](docs/demo-en.png)
 
-Use [v0.2.0](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.2.0) for large-file support and the **Limits** dialog. The v0.1.0 ZIP has a 10 MiB input file limit.
+The screenshot shows the source version. The [v0.2.0 ZIP](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.2.0) has large-file support and the **Limits** dialog in the earlier layout, where **Preview table** is always visible. The v0.1.0 ZIP has a 10 MiB input file limit.
 
 1. Download the Windows x64 ZIP from [GitHub Releases](https://github.com/hobby-programmer-5000/tablyfern/releases), extract the entire folder, and open **Tablyfern.exe**. Keep its `_internal` folder beside the EXE. From source, use Python 3.12–3.14, run `python -m pip install -r requirements.txt` from the repository root, then run `python app.py` or double-click [run.bat](run.bat).
 2. Click **Open JSON…**, paste data into the editor, or try **Load example**. Choose **JSONL** for pasted data when each line should be a separate record. Use the language menu to switch to Korean.
-3. Click **Preview table** after editing. Pick an output format and use **Save file…** to export the full table.
+3. Opening a file previews it automatically. If you paste or edit input, click **Update preview** or press **Ctrl+Enter**. Choose an output format at the bottom and use **Save file…** to export the full table.
 
 The Windows build uses the system Visual C++ runtime. If Windows reports a missing `VCRUNTIME` or `MSVCP` DLL, install Microsoft's [latest supported x64 Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/).
 
 ## Put several files in one workbook
 
 1. Click **Open multiple…** and select JSON, JSONL, or NDJSON files. Each file becomes its own tab, in the order returned by the file picker.
-2. Use the menu above the source text to preview each tab. Tablyfern takes tab names from filenames, adjusts them to fit [Excel's tab-name rules](https://support.microsoft.com/en-gb/excel/rename-a-worksheet), and adds suffixes when names collide.
+2. Use **Workbook tab** in the preview pane to view a sheet. Tablyfern takes tab names from filenames, adjusts them to fit Excel's rules, and adds suffixes when names collide. [Excel worksheet names](https://support.microsoft.com/en-gb/excel/rename-a-worksheet)
 3. Choose XLSX, XLSM, XLTX, XLTM, or ODS and click **Save file…** to save all tabs together. CSV and TSV are available for single-file exports.
 
 If a file cannot be read or parsed, Tablyfern identifies it and keeps the previous preview. To return to editing one input, use **Open JSON…** or **Load example**.
@@ -65,4 +65,4 @@ For `.xls` or `.xlsb`, export `.xlsx` and use **Save As** in desktop Excel. Use 
 
 ## Licenses
 
-Original source and samples use [MIT](LICENSE). Bundled components retain their own terms. [Third-party notices](THIRD-PARTY-NOTICES.md) · [Contributors](CONTRIBUTORS.md)
+Original source and samples use [MIT](LICENSE). Interface icons are by Lucide Contributors, with Feather portions by Cole Bemis. Bundled components retain their own terms. [Third-party notices](THIRD-PARTY-NOTICES.md) · [Contributors](CONTRIBUTORS.md)
