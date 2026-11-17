@@ -6,11 +6,13 @@ Tablyfern is a local Windows tool that converts JSON and JSON Lines into one wor
 
 ![Tablyfern previews an orders tab from a three-file workbook](docs/demo-en.png)
 
-The screenshot shows the source version. The [v0.2.0 ZIP](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.2.0) has large-file support and the **Limits** dialog in the earlier layout, where **Preview table** is always visible. The v0.1.0 ZIP has a 10 MiB input file limit.
+The screenshot shows the workspace in [v0.3.0](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.3.0), with automatic file previews and a compact layout for smaller windows.
 
 1. Download the Windows x64 ZIP from [GitHub Releases](https://github.com/hobby-programmer-5000/tablyfern/releases), extract the entire folder, and open **Tablyfern.exe**. Keep its `_internal` folder beside the EXE. From source, use Python 3.12–3.14, run `python -m pip install -r requirements.txt` from the repository root, then run `python app.py` or double-click [run.bat](run.bat).
 2. Click **Open JSON…**, paste data into the editor, or try **Load example**. Choose **JSONL** for pasted data when each line should be a separate record. Use the language menu to switch to Korean.
 3. Opening a file previews it automatically. If you paste or edit input, click **Update preview** or press **Ctrl+Enter**. Choose an output format at the bottom and use **Save file…** to export the full table.
+
+While a file is being read or saved, **Cancel** stops the job at its next processing checkpoint and cleans up temporary output. Closing the window during a job asks whether to cancel and quit.
 
 The Windows build uses the system Visual C++ runtime. If Windows reports a missing `VCRUNTIME` or `MSVCP` DLL, install Microsoft's [latest supported x64 Visual C++ Redistributable](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/).
 
@@ -61,7 +63,7 @@ For `.xls` or `.xlsb`, export `.xlsx` and use **Save As** in desktop Excel. Use 
 
 - Start with the original synthetic [sample data](samples/README.md). Run `python fixtures.py .cache/fixtures` to generate 35 additional synthetic inputs in a new directory.
 - With the app dependencies and the test reader `openpyxl==3.1.5` installed, run `python verify_formats.py .cache/matrix`. See `matrix.md` and `batch-matrix.md` for single-file and 33-tab workbook checks. [openpyxl 3.1.5](https://pypi.org/project/openpyxl/3.1.5/)
-- To build on Windows x64, install [requirements-build.txt](requirements-build.txt) and run `python scripts/build.py --dist-dir dist/0.2.0` into a new directory. The script tests the frozen app and writes a ZIP and SHA-256 checksum.
+- To build on Windows x64, install [requirements-build.txt](requirements-build.txt) and run `python scripts/build.py --dist-dir dist/0.3.0` into a new directory. The script tests the frozen app and writes a ZIP and SHA-256 checksum.
 
 ## Licenses
 

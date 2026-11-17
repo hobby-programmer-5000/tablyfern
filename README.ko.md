@@ -6,11 +6,13 @@ Tablyfern은 JSON과 JSONL을 시트 한 장이나 구분자 텍스트 파일로
 
 ![파일 세 개를 열고 주문 탭을 미리 보는 Tablyfern 화면](docs/demo-ko.png)
 
-위 이미지는 소스 버전의 화면입니다. [v0.2.0 배포 ZIP](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.2.0)에도 대용량 처리와 **사용 한도** 창이 있으며, 이전 화면에서는 **표 미리보기** 버튼이 항상 표시됩니다. v0.1.0 배포 ZIP에는 입력 파일당 10 MiB 한도가 적용됩니다.
+위 이미지는 [v0.3.0](https://github.com/hobby-programmer-5000/tablyfern/releases/tag/v0.3.0)의 화면입니다. 파일을 열면 표가 자동으로 표시되고, 작은 창에서는 위아래 배치로 바뀝니다.
 
 1. [GitHub 릴리스](https://github.com/hobby-programmer-5000/tablyfern/releases)에서 Windows x64 ZIP을 받아 전체 폴더를 압축 해제한 뒤 **Tablyfern.exe**를 실행합니다. EXE 옆의 `_internal` 폴더도 함께 둡니다. 소스에서 실행하려면 Python 3.12–3.14 환경에서 저장소 루트를 열고 `python -m pip install -r requirements.txt`를 실행한 뒤 `python app.py` 또는 [run.bat](run.bat)을 실행합니다.
 2. 언어 메뉴에서 **한국어**를 선택합니다. **JSON 열기…**를 누르거나 편집기에 데이터를 붙여넣습니다. **예제 불러오기**로 시작할 수도 있습니다.
 3. 파일을 열면 표가 자동으로 표시됩니다. 데이터를 붙여넣거나 고쳤다면 **미리보기 갱신**을 누르거나 **Ctrl+Enter**를 사용하세요. 하단에서 출력 형식을 고르고 **파일 저장…**을 누르면 전체 표가 저장됩니다.
+
+파일을 읽거나 저장하는 동안 **취소**를 누르면 다음 처리 중단 지점에서 작업을 멈추고 임시 출력을 정리합니다. 작업 중 창을 닫으면 취소 후 종료할지 확인합니다.
 
 Windows 빌드는 시스템 Visual C++ 런타임을 사용합니다. Windows에서 `VCRUNTIME` 또는 `MSVCP` DLL을 찾지 못한다면 Microsoft의 [최신 지원 x64 Visual C++ 재배포 가능 패키지](https://learn.microsoft.com/en-us/cpp/windows/latest-supported-vc-redist/)를 설치하세요.
 
@@ -61,7 +63,7 @@ Windows x64에서 1,073,745,005바이트짜리 가상 JSONL을 XLSX로 저장하
 
 - 직접 만든 [가상 샘플](samples/README.md)로 시작할 수 있습니다. `python fixtures.py .cache/fixtures`를 실행하면 별도 폴더에 가상 입력 35개가 생성됩니다.
 - 앱 의존성과 테스트용 읽기 라이브러리 `openpyxl==3.1.5`를 설치하고 `python verify_formats.py .cache/matrix`를 실행합니다. 결과표 `matrix.md`와 `batch-matrix.md`에서 단일 파일 및 33탭 통합 문서 검증을 확인할 수 있습니다. [openpyxl 3.1.5](https://pypi.org/project/openpyxl/3.1.5/)
-- Windows x64에서 빌드하려면 [requirements-build.txt](requirements-build.txt)를 설치하고, 새 출력 폴더를 지정해 `python scripts/build.py --dist-dir dist/0.2.0`을 실행합니다. 스크립트가 빌드된 앱을 실행해 확인하고 ZIP과 SHA-256 체크섬을 생성합니다.
+- Windows x64에서 빌드하려면 [requirements-build.txt](requirements-build.txt)를 설치하고, 새 출력 폴더를 지정해 `python scripts/build.py --dist-dir dist/0.3.0`을 실행합니다. 스크립트가 빌드된 앱을 실행해 확인하고 ZIP과 SHA-256 체크섬을 생성합니다.
 
 ## 라이선스
 
